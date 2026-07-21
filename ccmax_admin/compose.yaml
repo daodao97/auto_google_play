@@ -1,0 +1,18 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_PATH: ${DATABASE_PATH:-/app/data/ccmax.db}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?set BOOTSTRAP_ADMIN_PASSWORD}
+      CLAUDE_REGISTER_BASE_URL: ${CLAUDE_REGISTER_BASE_URL:-http://claude-register:8000}
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "${CCMAX_BIND_ADDRESS:-127.0.0.1}:${CCMAX_PORT:-8080}:8080"
+    restart: unless-stopped

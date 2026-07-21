@@ -1,0 +1,292 @@
+package dao
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+type GoogleAccount struct {
+	ID                int64      `json:"id"`
+	Mail              string     `json:"mail"`
+	Password          string     `json:"password,omitempty"`
+	Status            string     `json:"status"`
+	Enabled           int        `json:"enabled"`
+	DispatchCount     int        `json:"dispatchCount"`
+	LastDispatchedAt  *time.Time `json:"lastDispatchedAt"`
+	LockedUntil       *time.Time `json:"lockedUntil"`
+	LockRequestID     string     `json:"lockRequestId,omitempty"`
+	ClaudeAccountID   *int64     `json:"claudeAccountId"`
+	ClaudeAccountMail string     `json:"claudeAccountMail,omitempty"`
+	UsedAt            *time.Time `json:"usedAt"`
+	CreatedAt         time.Time  `json:"createdAt"`
+}
+
+const googleAccountColumns = `g.id,g.mail,g.password,g.status,g.enabled,g.dispatch_count,g.last_dispatched_at,g.locked_until,g.lock_request_id,g.claude_account_id,COALESCE(c.mail,''),g.used_at,g.created_at`
+
+func scanGoogleAccount(row interface{ Scan(...any) error }) (*GoogleAccount, error) {
+	item := &GoogleAccount{}
+	var lockedUntil sql.NullInt64
+	err := row.Scan(&item.ID, &item.Mail, &item.Password, &item.Status, &item.Enabled, &item.DispatchCount, &item.LastDispatchedAt, &lockedUntil, &item.LockRequestID, &item.ClaudeAccountID, &item.ClaudeAccountMail, &item.UsedAt, &item.CreatedAt)
+	if err == nil && lockedUntil.Valid {
+		value := time.Unix(lockedUntil.Int64, 0)
+		item.LockedUntil = &value
+	}
+	return item, err
+}
+
+func (s *Store) CreateGoogleAccount(ctx context.Context, mail, password string) (int64, error) {
+	mail = strings.ToLower(strings.TrimSpace(mail))
+	if mail == "" || !strings.Contains(mail, "@") || password == "" {
+		return 0, errors.New("valid mail and password are required")
+	}
+	if strings.ContainsAny(mail, "\r\n|") || strings.ContainsAny(password, "\r\n") {
+		return 0, errors.New("mail and password must be single-line values")
+	}
+	result, err := s.DB.ExecContext(ctx, `INSERT INTO google_accounts(mail,password) VALUES(?,?)`, mail, password)
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (s *Store) ListGoogleAccounts(ctx context.Context, page, size int, query, status string, enabled int) ([]GoogleAccount, int, error) {
+	if _, err := s.ReleaseExpiredGoogleAccountLeases(ctx); err != nil {
+		return nil, 0, err
+	}
+	where := ` WHERE 1=1`
+	args := []any{}
+	if query = strings.TrimSpace(query); query != "" {
+		where += ` AND g.mail LIKE ?`
+		args = append(args, "%"+query+"%")
+	}
+	if status = strings.ToLower(strings.TrimSpace(status)); status != "" {
+		if status != "unused" && status != "used" {
+			return nil, 0, errors.New("status must be unused or used")
+		}
+		where += ` AND g.status=?`
+		args = append(args, status)
+	}
+	if enabled != 0 {
+		if enabled != 1 && enabled != -1 {
+			return nil, 0, errors.New("enabled must be 1 or -1")
+		}
+		where += ` AND g.enabled=?`
+		args = append(args, enabled)
+	}
+	var total int
+	if err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM google_accounts g`+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	args = append(args, size, (page-1)*size)
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+googleAccountColumns+` FROM google_accounts g LEFT JOIN claude_accounts c ON c.id=g.claude_account_id`+where+` ORDER BY g.id DESC LIMIT ? OFFSET ?`, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items := []GoogleAccount{}
+	for rows.Next() {
+		item, scanErr := scanGoogleAccount(rows)
+		if scanErr != nil {
+			return nil, 0, scanErr
+		}
+		items = append(items, *item)
+	}
+	return items, total, rows.Err()
+}
+
+func (s *Store) DispatchGoogleAccount(ctx context.Context, apiKeyID int64, requestID string, lease time.Duration, ip string) (*GoogleAccount, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return nil, errors.New("requestId is required")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE google_accounts SET locked_until=NULL,lock_request_id='',updated_at=CURRENT_TIMESTAMP WHERE status='unused' AND locked_until IS NOT NULL AND locked_until<=unixepoch()`); err != nil {
+		return nil, err
+	}
+	item, err := scanGoogleAccount(tx.QueryRowContext(ctx, `SELECT `+googleAccountColumns+` FROM google_account_dispatches d JOIN google_accounts g ON g.id=d.google_account_id LEFT JOIN claude_accounts c ON c.id=g.claude_account_id WHERE d.api_key_id=? AND d.request_id=?`, apiKeyID, requestID))
+	if err == nil {
+		if item.Status == "used" || (item.LockRequestID == requestID && item.LockedUntil != nil && item.LockedUntil.After(time.Now())) {
+			if err = tx.Commit(); err != nil {
+				return nil, err
+			}
+			return item, nil
+		}
+		return nil, errors.New("idempotency lease has expired")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	item, err = scanGoogleAccount(tx.QueryRowContext(ctx, `SELECT `+googleAccountColumns+` FROM google_accounts g LEFT JOIN claude_accounts c ON c.id=g.claude_account_id WHERE g.enabled=1 AND g.status='unused' AND g.locked_until IS NULL ORDER BY g.last_dispatched_at ASC,g.id ASC LIMIT 1`))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, errors.New("insufficient google accounts")
+	}
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	lockedUntil := now.Add(lease).Truncate(time.Second)
+	result, err := tx.ExecContext(ctx, `UPDATE google_accounts SET locked_until=?,lock_request_id=?,dispatch_count=dispatch_count+1,last_dispatched_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND enabled=1 AND status='unused' AND locked_until IS NULL`, lockedUntil.Unix(), requestID, now, item.ID)
+	if err != nil {
+		return nil, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return nil, errors.New("google account allocation conflict; please retry")
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO google_account_dispatches(request_id,api_key_id,google_account_id,client_ip) VALUES(?,?,?,?)`, requestID, apiKeyID, item.ID, ip); err != nil {
+		return nil, err
+	}
+	item.DispatchCount++
+	item.LastDispatchedAt = &now
+	item.LockedUntil = &lockedUntil
+	item.LockRequestID = requestID
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (s *Store) UseGoogleAccount(ctx context.Context, apiKeyID int64, requestID string, googleAccountID int64, claudeMail string) (*GoogleAccount, error) {
+	requestID = strings.TrimSpace(requestID)
+	claudeMail = strings.ToLower(strings.TrimSpace(claudeMail))
+	if requestID == "" || googleAccountID <= 0 || claudeMail == "" {
+		return nil, errors.New("requestId, positive googleAccountId and claudeAccountMail are required")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var dispatchedID int64
+	if err = tx.QueryRowContext(ctx, `SELECT google_account_id FROM google_account_dispatches WHERE api_key_id=? AND request_id=?`, apiKeyID, requestID).Scan(&dispatchedID); err != nil {
+		return nil, err
+	}
+	if dispatchedID != googleAccountID {
+		return nil, errors.New("google account does not belong to this dispatch request")
+	}
+	var claudeID int64
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM claude_accounts WHERE mail=? COLLATE NOCASE`, claudeMail).Scan(&claudeID); err != nil {
+		return nil, err
+	}
+	var status, lockRequestID string
+	var linkedClaudeID sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT status,lock_request_id,claude_account_id FROM google_accounts WHERE id=?`, googleAccountID).Scan(&status, &lockRequestID, &linkedClaudeID); err != nil {
+		return nil, err
+	}
+	if status == "used" {
+		if linkedClaudeID.Valid && linkedClaudeID.Int64 == claudeID {
+			item, scanErr := scanGoogleAccount(tx.QueryRowContext(ctx, `SELECT `+googleAccountColumns+` FROM google_accounts g LEFT JOIN claude_accounts c ON c.id=g.claude_account_id WHERE g.id=?`, googleAccountID))
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			if err = tx.Commit(); err != nil {
+				return nil, err
+			}
+			return item, nil
+		}
+		return nil, errors.New("google account is already used")
+	}
+	if lockRequestID != requestID {
+		return nil, errors.New("google account lease has expired or been reassigned")
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE google_accounts SET status='used',claude_account_id=?,used_at=CURRENT_TIMESTAMP,locked_until=NULL,lock_request_id='',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='unused'`, claudeID, googleAccountID); err != nil {
+		return nil, err
+	}
+	item, err := scanGoogleAccount(tx.QueryRowContext(ctx, `SELECT `+googleAccountColumns+` FROM google_accounts g LEFT JOIN claude_accounts c ON c.id=g.claude_account_id WHERE g.id=?`, googleAccountID))
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (s *Store) ReleaseExpiredGoogleAccountLeases(ctx context.Context) (int64, error) {
+	result, err := s.DB.ExecContext(ctx, `UPDATE google_accounts SET locked_until=NULL,lock_request_id='',updated_at=CURRENT_TIMESTAMP WHERE status='unused' AND locked_until IS NOT NULL AND locked_until<=unixepoch()`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *Store) GoogleAccountStats(ctx context.Context) (map[string]int, error) {
+	if _, err := s.ReleaseExpiredGoogleAccountLeases(ctx); err != nil {
+		return nil, err
+	}
+	result := map[string]int{"unused": 0, "locked": 0, "used": 0, "total": 0}
+	rows, err := s.DB.QueryContext(ctx, `SELECT status,enabled,CASE WHEN status='unused' AND locked_until IS NOT NULL THEN 1 ELSE 0 END,count(*) FROM google_accounts GROUP BY status,enabled,CASE WHEN status='unused' AND locked_until IS NOT NULL THEN 1 ELSE 0 END`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var enabled, locked, count int
+		if err = rows.Scan(&status, &enabled, &locked, &count); err != nil {
+			return nil, err
+		}
+		result["total"] += count
+		if status == "used" {
+			result["used"] += count
+		} else if enabled != 1 {
+			continue
+		} else if locked == 1 {
+			result["locked"] += count
+		} else {
+			result["unused"] += count
+		}
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) SetGoogleAccountEnabled(ctx context.Context, id int64, enabled int) error {
+	if enabled != 1 && enabled != -1 {
+		return errors.New("enabled must be 1 or -1")
+	}
+	result, err := s.DB.ExecContext(ctx, `UPDATE google_accounts SET enabled=?,locked_until=CASE WHEN ?=-1 THEN NULL ELSE locked_until END,lock_request_id=CASE WHEN ?=-1 THEN '' ELSE lock_request_id END,updated_at=CURRENT_TIMESTAMP WHERE id=?`, enabled, enabled, enabled, id)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) DeleteGoogleAccount(ctx context.Context, id int64) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM google_account_dispatches WHERE google_account_id=?`, id); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM google_accounts WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
+}
+
+func ParseGoogleAccountLine(line string) (string, string, error) {
+	line = strings.TrimSpace(line)
+	mail, password, found := strings.Cut(line, "|")
+	mail = strings.TrimSpace(mail)
+	password = strings.TrimSpace(password)
+	if !found || mail == "" || password == "" {
+		return "", "", fmt.Errorf("expected mail|password")
+	}
+	return mail, password, nil
+}

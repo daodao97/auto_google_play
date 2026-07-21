@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Claude Register 控制台</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main_content">跳到主要内容</a>
+
+  <header class="app-header">
+    <div class="brand">
+      <img class="brand-mark" src="/assets/favicon.svg" alt="" width="36" height="36">
+      <div>
+        <h1>Claude Register</h1>
+        <p>注册与会话运营控制台</p>
+      </div>
+    </div>
+    <div class="header-status">
+      <span id="connection_status" class="connection-pill is-connecting" role="status" aria-live="polite">
+        <span class="connection-dot" aria-hidden="true"></span>
+        正在连接
+      </span>
+      <span id="last_update" class="last-update">尚未更新</span>
+      <span id="access_scope" class="access-scope">访问范围确认中</span>
+    </div>
+  </header>
+
+  <div id="error_banner" class="error-banner" role="alert" hidden>
+    <span aria-hidden="true">!</span>
+    <p id="error_message"></p>
+    <button id="btn_dismiss_error" type="button">关闭</button>
+  </div>
+
+  <main id="main_content" class="workspace">
+    <aside class="run-panel" aria-labelledby="run_panel_title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">运行配置</p>
+          <h2 id="run_panel_title">运行设置</h2>
+        </div>
+        <span id="account_count" class="count-badge">0 个账号</span>
+      </div>
+
+      <div class="mode-tabs" role="tablist" aria-label="流程模式">
+        <button class="mode-tab is-active" type="button" data-flow-mode="register" role="tab" aria-selected="true">
+          <span>注册新号</span>
+          <small>验证后继续初始化</small>
+        </button>
+        <button class="mode-tab" type="button" data-flow-mode="session" role="tab" aria-selected="false">
+          <span>提 Session</span>
+          <small>已注册账号仅提取会话</small>
+        </button>
+      </div>
+
+      <div class="mode-note" role="note">
+        <strong id="mode_note_title">注册新号</strong>
+        <span id="mode_note_text">完成 magic link 验证后继续初始化账号。</span>
+      </div>
+
+      <div class="field-group">
+        <label for="mail_provider">邮件取信方式</label>
+        <select id="mail_provider">
+          <option value="mailcom">mailcom · xcaigc 邮箱代理</option>
+          <option value="imap">imap · xcaigc IMAP 代理</option>
+          <option value="microsoft">microsoft · xcaigc Microsoft 代理</option>
+        </select>
+        <p id="format_hint" class="field-hint">通过 mail.xcaigc.com 的 mailcom provider 取信。</p>
+      </div>
+
+      <div class="field-group accounts-field">
+        <div class="label-row">
+          <label id="accounts_label" for="accounts_text">账号列表</label>
+          <span>每行一个，支持 # 注释</span>
+        </div>
+        <textarea id="accounts_text" rows="9" spellcheck="false" autocomplete="off"
+          placeholder="name@mail.com----password----display_name"></textarea>
+      </div>
+
+      <div class="compact-grid">
+        <div class="field-group">
+          <label for="concurrency">并发</label>
+          <input id="concurrency" type="number" min="1" max="10" value="2" inputmode="numeric">
+        </div>
+        <div class="field-group">
+          <label for="retry_max">重试</label>
+          <input id="retry_max" type="number" min="0" max="5" value="2" inputmode="numeric">
+        </div>
+        <div class="field-group">
+          <label for="mail_poll">轮询秒数</label>
+          <input id="mail_poll" type="number" min="0" step="1" value="3" inputmode="decimal">
+        </div>
+        <div class="field-group">
+          <label for="send_settle_delay">发信后等待</label>
+          <input id="send_settle_delay" type="number" min="0" max="30" step="0.1" placeholder="默认" inputmode="decimal">
+        </div>
+      </div>
+
+      <label class="check-row" for="auto_send">
+        <input id="auto_send" type="checkbox" checked>
+        <span>
+          <strong>自动发信</strong>
+          <small>关闭后等待手动触发邮件</small>
+        </span>
+      </label>
+
+      <label class="check-row" for="mail_fast_path">
+        <input id="mail_fast_path" type="checkbox">
+        <span>
+          <strong>邮箱快速路径</strong>
+          <small>仅合并首次取信等待，默认关闭</small>
+        </span>
+      </label>
+
+      <label class="check-row" for="resolve_exit_ip">
+        <input id="resolve_exit_ip" type="checkbox">
+        <span>
+          <strong>解析出口 IP</strong>
+          <small>任务结束后通过同一代理做短超时探测</small>
+        </span>
+      </label>
+
+      <div class="primary-actions">
+        <button id="btn_start" class="button button-primary" type="button">开始注册</button>
+        <button id="btn_stop" class="button button-danger" type="button" disabled>停止</button>
+      </div>
+
+      <div class="run-feedback">
+        <div class="progress-track" aria-hidden="true">
+          <span id="progress_bar"></span>
+        </div>
+        <p id="status_line" class="run-status" role="status" aria-live="polite">
+          就绪。填好账号后即可开始。
+        </p>
+      </div>
+
+      <details class="advanced-settings">
+        <summary>高级设置</summary>
+        <div class="advanced-body">
+          <div class="field-group">
+            <label for="proxy_mode">代理模式</label>
+            <select id="proxy_mode">
+              <option value="configured">沿用服务端配置</option>
+              <option value="override">本次使用新代理</option>
+              <option value="direct">本次直连</option>
+            </select>
+            <p id="proxy_preview" class="field-hint">服务端代理状态读取中</p>
+          </div>
+          <div class="field-group">
+            <label for="proxy_template">代理模板</label>
+            <input id="proxy_template" autocomplete="off" placeholder="支持 {session} 占位符" disabled>
+          </div>
+          <div class="field-group">
+            <label for="impersonate">浏览器兼容模式</label>
+            <input id="impersonate" autocomplete="off" placeholder="chrome142">
+            <p class="field-hint">留空时沿用本地配置；这里只控制客户端兼容版本。</p>
+          </div>
+        </div>
+      </details>
+
+      <nav class="download-links" aria-label="下载结果">
+        <a data-run-download="results.txt" hidden>Results</a>
+        <a data-run-download="partial.txt" hidden>Partial</a>
+        <a data-run-download="failed.txt" hidden>Failed</a>
+      </nav>
+    </aside>
+
+    <section class="dashboard" aria-label="任务概览">
+      <div class="summary-grid" aria-label="任务状态筛选">
+        <button class="summary-card is-active" type="button" data-summary-filter="all" aria-pressed="true">
+          <span>总任务</span><strong id="s_total">0</strong><small>全部状态</small>
+        </button>
+        <button class="summary-card tone-running" type="button" data-summary-filter="running" aria-pressed="false">
+          <span>进行中</span><strong id="s_running">0</strong><small>当前执行</small>
+        </button>
+        <button class="summary-card" type="button" data-summary-filter="pending" aria-pressed="false">
+          <span>待处理</span><strong id="s_pending">0</strong><small>队列等待</small>
+        </button>
+        <button class="summary-card tone-success" type="button" data-summary-filter="success" aria-pressed="false">
+          <span>成功</span><strong id="s_success">0</strong><small>流程已完成</small>
+        </button>
+        <button class="summary-card tone-partial" type="button" data-summary-filter="partial" aria-pressed="false">
+          <span>部分完成</span><strong id="s_partial">0</strong><small>需要人工查看</small>
+        </button>
+        <button class="summary-card tone-failed" type="button" data-summary-filter="failed" aria-pressed="false">
+          <span>失败</span><strong id="s_failed">0</strong><small>需要处理</small>
+        </button>
+      </div>
+
+      <div class="kyc-summary" aria-label="KYC 结果概览">
+        <div class="kyc-metric tone-success"><span>免 KYC / 已通过</span><strong id="s_kyc_pass">0</strong></div>
+        <div class="kyc-metric tone-running"><span>需要 KYC</span><strong id="s_kyc_required">0</strong></div>
+        <div class="kyc-metric tone-partial"><span>异常未知</span><strong id="s_kyc_unknown">0</strong></div>
+        <div class="kyc-metric tone-failed"><span>会话失效</span><strong id="s_kyc_dead">0</strong></div>
+      </div>
+
+      <section class="content-panel task-panel" aria-labelledby="task_panel_title">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">实时队列</p>
+            <h2 id="task_panel_title">任务队列</h2>
+          </div>
+          <span id="visible_count" class="muted-text">显示 0 / 0</span>
+        </div>
+
+        <div class="task-toolbar">
+          <div class="search-field">
+            <label class="visually-hidden" for="task_search">搜索任务</label>
+            <svg aria-hidden="true" viewBox="0 0 20 20" focusable="false">
+              <circle cx="8.5" cy="8.5" r="4.75"></circle>
+              <path d="m12 12 4 4"></path>
+            </svg>
+            <input id="task_search" type="search" placeholder="搜索邮箱、Worker 或错误类型" autocomplete="off">
+          </div>
+          <div class="field-inline">
+            <label for="task_filter">状态</label>
+            <select id="task_filter">
+              <option value="all">全部</option>
+              <option value="running">进行中</option>
+              <option value="pending">待处理</option>
+              <option value="success">成功</option>
+              <option value="partial">部分完成</option>
+              <option value="failed">失败</option>
+            </select>
+          </div>
+          <div class="field-inline">
+            <label for="task_page_size">每页</label>
+            <select id="task_page_size">
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="200">200</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="table-scroll" tabindex="0" aria-label="任务列表，可横向滚动">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">账号</th>
+                <th scope="col">阶段</th>
+                <th scope="col">状态</th>
+                <th scope="col">KYC</th>
+                <th scope="col">Worker</th>
+                <th scope="col">出口 IP</th>
+                <th scope="col">耗时</th>
+                <th scope="col"><span class="visually-hidden">操作</span></th>
+              </tr>
+            </thead>
+            <tbody id="tbody">
+              <tr><td colspan="8" class="empty-state">暂无任务，先从左侧创建一次运行。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pagination" aria-label="任务分页">
+          <button id="page_prev" type="button" disabled>上一页</button>
+          <span id="page_label" aria-live="polite">第 1 / 1 页</span>
+          <button id="page_next" type="button" disabled>下一页</button>
+        </div>
+      </section>
+
+      <section class="content-panel results-panel" aria-labelledby="results_title">
+        <div class="panel-header results-heading">
+          <div>
+            <p class="eyebrow">结果分流</p>
+            <h2 id="results_title">结果分流</h2>
+          </div>
+          <div class="result-downloads">
+            <a data-run-download="kyc_pass.txt" hidden>免 KYC</a>
+            <a data-run-download="kyc_required.txt" hidden>需 KYC</a>
+            <a data-run-download="kyc_unknown.txt" hidden>未知</a>
+            <a data-run-download="kyc_dead.txt" hidden>失效</a>
+          </div>
+        </div>
+
+        <div class="result-grid">
+          <article class="result-bucket tone-success">
+            <header><div><span>免 KYC</span><strong id="cnt_pass">0</strong></div><button id="btn_copy_pass" type="button">复制全部</button></header>
+            <div id="res_pass" class="result-list" aria-live="polite"></div>
+          </article>
+          <article class="result-bucket tone-running">
+            <header><div><span>需 KYC</span><strong id="cnt_required">0</strong></div><button id="btn_copy_required" type="button">复制全部</button></header>
+            <div id="res_required" class="result-list" aria-live="polite"></div>
+          </article>
+          <article class="result-bucket tone-partial">
+            <header><div><span>异常未知</span><strong id="cnt_unknown">0</strong></div><button id="btn_copy_unknown" type="button">复制全部</button></header>
+            <div id="res_unknown" class="result-list" aria-live="polite"></div>
+          </article>
+          <article class="result-bucket tone-failed">
+            <header><div><span>失效</span><strong id="cnt_dead">0</strong></div><button id="btn_copy_dead" type="button">复制全部</button></header>
+            <div id="res_dead" class="result-list" aria-live="polite"></div>
+          </article>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="task_details" class="task-dialog" aria-labelledby="task_details_title">
+    <div class="dialog-header">
+      <div>
+        <p class="eyebrow">任务详情</p>
+        <h2 id="task_details_title">任务详情</h2>
+      </div>
+      <button id="btn_close_details" class="icon-button" type="button" aria-label="关闭任务详情">×</button>
+    </div>
+    <div id="task_details_content" class="dialog-content"></div>
+  </dialog>
+
+  <dialog id="stop_confirm" class="task-dialog confirm-dialog" aria-labelledby="stop_confirm_title">
+    <div class="dialog-header">
+      <div>
+        <p class="eyebrow">停止确认</p>
+        <h2 id="stop_confirm_title">确认停止当前运行？</h2>
+      </div>
+    </div>
+    <div class="dialog-content">
+      <p>停止请求会等待正在执行的任务退出，队列中尚未开始的任务不会继续。</p>
+      <p class="muted-text">当前进行中：<strong id="stop_running_count">0</strong>，待处理：<strong id="stop_pending_count">0</strong></p>
+      <div class="dialog-actions">
+        <button id="btn_cancel_stop" class="button" type="button">继续运行</button>
+        <button id="btn_confirm_stop" class="button button-danger" type="button">确认停止</button>
+      </div>
+    </div>
+  </dialog>
+
+  <nav id="mobile_run_dock" class="mobile-run-dock" aria-label="移动端运行控制">
+    <span id="mobile_run_status">就绪</span>
+    <button id="mobile_btn_start" class="button button-primary" type="button">开始注册</button>
+    <button id="mobile_btn_stop" class="button button-danger" type="button" disabled>停止</button>
+  </nav>
+
+  <div id="toast_region" class="toast-region" aria-live="assertive" aria-atomic="true"></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

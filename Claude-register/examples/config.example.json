@@ -1,0 +1,50 @@
+{
+  "impersonate": "chrome142",
+  "proxy": "",
+  "proxy_template": "http://storm-USER_session-{session}_life-1:PASSWORD@us.stormip.cn:1100",
+
+  "concurrency": 2,
+  "workers": [],
+  "worker_interval_seconds": 0,
+  "retry_max": 2,
+  "auto_send": true,
+  "flow_mode": "register",
+  "accounts_file": "runtime/accounts.txt",
+  "output_file": "runtime/results.txt",
+  "failed_file": "runtime/failed.txt",
+  "partial_file": "runtime/partial.txt",
+  "kyc_pass_file": "runtime/kyc_pass.txt",
+  "kyc_required_file": "runtime/kyc_required.txt",
+  "kyc_unknown_file": "runtime/kyc_unknown.txt",
+  "kyc_dead_file": "runtime/kyc_dead.txt",
+  "mail_provider": "mailcom",
+  "mail_request_interval": 7.5,
+  "mail_poll_interval": 3,
+  "mail_poll_timeout": 180,
+  "mail_fast_path": false,
+  "send_settle_delay": null,
+
+  "arkose": {
+    "public_key": "EEA5F558-D6AC-4C03-B678-AABF639EE69A",
+    "passive_token": "",
+    "solver": {
+      "provider": "yescaptcha",
+      "api_key": "YOUR_YESCAPTCHA_KEY",
+      "website_url": "https://claude.ai/magic-link",
+      "js_subdomain": "https://a-cdn.claude.ai",
+      "data_blob": "",
+      "timeout": 180,
+      "interval": 5
+    },
+    "replay": {
+      "c_blob": "",
+      "x_ark_arid": "",
+      "x_ark_esync_value": 1782648000,
+      "ark_build_id": "f106434e-87cc-45db-ae02-4f86ce43f9d9"
+    }
+  },
+
+  "email": "",
+  "password": "",
+  "display_name": "xiaoshua"
+}

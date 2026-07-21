@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Interlace 自动化</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <h1>Interlace 自动化</h1>
+
+      <div class="run-bar">
+        <div>
+          <span id="automationState" class="state stopped">读取状态中</span>
+          <div id="tabMonitorState" class="monitor-state">标签页监测：检查中</div>
+          <div id="tabMonitorUrl" class="monitor-url"></div>
+        </div>
+        <div class="run-actions">
+          <button id="start" class="start" type="button">开始</button>
+          <button id="stop" class="stop" type="button">停止</button>
+        </div>
+      </div>
+
+      <label>用户名<input id="username" autocomplete="username" placeholder="Interlace 用户名 / 账号"></label>
+      <label>密码<input id="password" type="password" autocomplete="current-password" placeholder="Interlace 密码"></label>
+      <label>上报 source<input id="source" placeholder="interlace"></label>
+      <label>上报接口<input id="submitUrl" placeholder="http://38.97.63.31:7788/api/card/verify-code/token"></label>
+      <label>X-API-Key<input id="apiKey" type="password"></label>
+      <label>定时上报间隔（秒）<input id="reportIntervalSeconds" type="number" min="15" step="1" placeholder="60"></label>
+
+      <label class="check"><input id="autoLogin" type="checkbox">自动填充并点击登录</label>
+      <label class="check"><input id="autoSubmit" type="checkbox">捕获 access-token 后自动上报</label>
+
+      <section class="probe-config">
+        <label class="check"><input id="autoProbe" type="checkbox">定时探测登录状态，401 时重新登录</label>
+        <label>探活接口<input id="probeUrl" placeholder="https://assets-prod.interlace.money/api/task-progress/page"></label>
+        <label>探活间隔（秒）<input id="probeIntervalSeconds" type="number" min="15" step="1" placeholder="30"></label>
+      </section>
+
+      <div class="actions">
+        <button id="save" type="button">保存配置</button>
+        <button id="open" type="button">打开 Interlace</button>
+      </div>
+
+      <p id="status" role="status"></p>
+
+      <section class="logs">
+        <div class="logs-head">
+          <h2>运行日志</h2>
+          <div>
+            <button id="refreshLogs" class="small" type="button">刷新</button>
+            <button id="clearLogs" class="small secondary" type="button">清空</button>
+          </div>
+        </div>
+        <div id="lastTokenEvent" class="last-token"></div>
+        <ol id="logsList"></ol>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

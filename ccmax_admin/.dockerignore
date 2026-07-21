@@ -1,0 +1,7 @@
+.idea
+.vscode
+.github
+build
+data
+web/node_modules
+web/dist

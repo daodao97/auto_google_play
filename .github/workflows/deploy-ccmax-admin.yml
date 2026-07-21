@@ -1,0 +1,60 @@
+name: Deploy ccmax admin
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-ccmax-admin-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          ssh-keyscan -H 38.97.63.31 >> "$HOME/.ssh/known_hosts"
+
+      - name: Pull and deploy unified services
+        run: |
+          ssh \
+            -i "$HOME/.ssh/deploy_key" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            user1@38.97.63.31 \
+            "sudo -n bash -lc '
+              set -e
+              cd /opt/money-printer
+              git pull --ff-only origin main
+              docker compose config >/dev/null
+              (cd Claude-register && docker compose down --remove-orphans)
+              (cd ccmax_admin && docker compose down --remove-orphans)
+              docker compose up -d --build --remove-orphans
+            '"
+
+      - name: Send deployment notification
+        if: ${{ success() }}
+        env:
+          BARK_PUSH_URL: ${{ secrets.BARK_PUSH_URL }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          curl --fail --silent --show-error --retry 3 \
+            --request POST "$BARK_PUSH_URL" \
+            --data-urlencode "title=money-printer 部署成功" \
+            --data-urlencode "body=Claude-register 与 ccmax_admin 已通过根目录 Compose 成功部署到生产环境
+          分支：main
+          提交：$COMMIT_SHA" \
+            --data-urlencode "group=money-printer-deploy"

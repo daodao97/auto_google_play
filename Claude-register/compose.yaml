@@ -1,0 +1,54 @@
+services:
+  claude-register-runtime-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: claude-register:local
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - |
+        chown -R "${PUID:-1000}:${PGID:-1000}" /app/runtime
+        chmod 700 /app/runtime
+    volumes:
+      - ./runtime:/app/runtime
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  claude-register:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: claude-register:local
+    container_name: claude-register
+    depends_on:
+      claude-register-runtime-init:
+        condition: service_completed_successfully
+    init: true
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      WEBUI_TOKEN: ${WEBUI_TOKEN:?set WEBUI_TOKEN in .env}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    volumes:
+      - ./runtime:/app/runtime
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${WEBUI_PORT:-8000}:8000"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

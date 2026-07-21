@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Interlace Money 自动化",
+  "version": "1.4.1",
+  "description": "Interlace Money 自动登录、access-token 上报与登录态探活。",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://interlace.money/*",
+    "https://www.interlace.money/*",
+    "https://assets-prod.interlace.money/*",
+    "http://38.97.63.31:7788/*"
+  ],
+  "action": {
+    "default_title": "Interlace 自动化",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://interlace.money/*",
+        "https://www.interlace.money/*"
+      ],
+      "js": [
+        "page-hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://interlace.money/*",
+        "https://www.interlace.money/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

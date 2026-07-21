@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatgpt-register"
+version = "0.1.0"
+description = "ChatGPT OTP registration state machine and batch orchestrator"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "curl-cffi>=0.7.0,<1",
+  "fastapi>=0.110,<1",
+  "pydantic>=2.9,<3",
+  "requests>=2.31.0,<3",
+  "urllib3>=2.0,<3",
+  "uvicorn[standard]>=0.27,<1",
+]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.27,<1", "pytest>=8,<9", "ruff>=0.9,<1"]
+
+[project.scripts]
+chatgpt-register = "chatgpt_register.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["chatgpt_register*"]
+
+[tool.setuptools.package-data]
+"chatgpt_register.presentation" = ["static/*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"

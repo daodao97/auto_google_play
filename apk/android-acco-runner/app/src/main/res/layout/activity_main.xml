@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="服务状态" android:textSize="18sp" android:textStyle="bold" android:layout_marginBottom="8dp" />
+        <TextView android:id="@+id/tv_server_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="HTTP Server: --" android:textSize="14sp" android:fontFamily="monospace" />
+        <TextView android:id="@+id/tv_a11y_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="无障碍服务: --" android:textSize="14sp" android:fontFamily="monospace" />
+        <TextView android:id="@+id/tv_root_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Root 权限: 检测中..." android:textSize="14sp" android:fontFamily="monospace" android:layout_marginBottom="4dp" />
+        <TextView android:id="@+id/tv_wireless_adb_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="无线 ADB: 检测中..." android:textSize="14sp" android:fontFamily="monospace" android:layout_marginBottom="16dp" />
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#CCCCCC" android:layout_marginBottom="16dp" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Google 账号" android:textSize="18sp" android:textStyle="bold" android:layout_marginBottom="8dp" />
+        <TextView android:id="@+id/tv_accounts" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="点击刷新查看账号列表" android:textSize="14sp" android:fontFamily="monospace" android:minHeight="60dp" android:layout_marginBottom="8dp" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="16dp">
+            <Button android:id="@+id/btn_refresh_accounts" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="刷新" android:layout_marginEnd="4dp" />
+            <Button android:id="@+id/btn_remove_all" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="移除全部" android:layout_marginStart="4dp" />
+        </LinearLayout>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#CCCCCC" android:layout_marginBottom="16dp" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="任务状态" android:textSize="18sp" android:textStyle="bold" android:layout_marginBottom="8dp" />
+        <TextView android:id="@+id/tv_task_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="空闲" android:textSize="14sp" android:fontFamily="monospace" android:layout_marginBottom="8dp" />
+        <Button android:id="@+id/btn_stop_task" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="停止任务" android:textSize="12sp" android:layout_marginBottom="16dp" />
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#CCCCCC" android:layout_marginBottom="16dp" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="运行配置" android:textSize="18sp" android:textStyle="bold" android:layout_marginBottom="8dp" />
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="手机 ID" android:textSize="12sp" android:textColor="#666666" />
+        <EditText android:id="@+id/et_phone_id" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="例如 phone_1" android:textSize="13sp" android:fontFamily="monospace" android:singleLine="true" android:layout_marginBottom="8dp" />
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="单个任务最大执行秒数" android:textSize="12sp" android:textColor="#666666" />
+        <EditText android:id="@+id/et_task_timeout" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="例如 120" android:inputType="number" android:textSize="13sp" android:fontFamily="monospace" android:singleLine="true" android:layout_marginBottom="8dp" />
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="API 地址" android:textSize="12sp" android:textColor="#666666" />
+        <EditText android:id="@+id/et_api_url" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="https://&lt;server-host&gt;:4399" android:textSize="13sp" android:fontFamily="monospace" android:singleLine="true" android:layout_marginBottom="8dp" />
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="WS 地址" android:textSize="12sp" android:textColor="#666666" />
+        <EditText android:id="@+id/et_ws_url" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="wss://&lt;server-host&gt;:4400" android:textSize="13sp" android:fontFamily="monospace" android:singleLine="true" android:layout_marginBottom="8dp" />
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="密码：管理端 API Token。HTTP 和 WS 请求会以 Bearer Token 方式携带。" android:textSize="12sp" android:textColor="#666666" />
+        <EditText android:id="@+id/et_api_token" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="API Token" android:inputType="textVisiblePassword" android:textSize="13sp" android:fontFamily="monospace" android:singleLine="true" android:layout_marginBottom="8dp" />
+
+        <Switch android:id="@+id/sw_wireless_debug" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="无线调试固定端口" android:textSize="14sp" android:layout_marginTop="4dp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="自动打开无线 ADB 为以下端口" android:textSize="12sp" android:textColor="#666666" />
+        <EditText android:id="@+id/et_adb_tcp_port" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="ADB TCP 端口，默认 5555" android:inputType="number" android:text="5555" android:textSize="13sp" android:fontFamily="monospace" android:singleLine="true" android:layout_marginBottom="4dp" />
+        <TextView android:id="@+id/tv_adb_tcp_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="无线调试固定端口未启用" android:textSize="11sp" android:fontFamily="monospace" android:background="#F5F5F5" android:padding="8dp" android:layout_marginBottom="8dp" />
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="8dp">
+            <Button android:id="@+id/btn_save_config" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="保存配置" android:textSize="12sp" android:layout_marginEnd="4dp" />
+            <Button android:id="@+id/btn_test_api" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="测试 API" android:textSize="12sp" android:layout_marginHorizontal="4dp" />
+            <Button android:id="@+id/btn_test_ws" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="测试 WS" android:textSize="12sp" android:layout_marginStart="4dp" />
+        </LinearLayout>
+        <TextView android:id="@+id/tv_runtime_test_result" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="运行配置用于连接管理端" android:textSize="12sp" android:fontFamily="monospace" android:background="#F5F5F5" android:padding="8dp" android:layout_marginBottom="16dp" />
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#CCCCCC" android:layout_marginBottom="16dp" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="执行日志" android:textSize="18sp" android:textStyle="bold" android:layout_marginBottom="8dp" />
+        <ScrollView android:id="@+id/sv_log" android:layout_width="match_parent" android:layout_height="300dp" android:background="#F5F5F5" android:padding="8dp">
+            <TextView android:id="@+id/tv_log" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="暂无日志" android:textSize="11sp" android:fontFamily="monospace" android:lineSpacingExtra="2dp" />
+        </ScrollView>
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#CCCCCC" android:layout_marginTop="16dp" android:layout_marginBottom="16dp" />
+
+    </LinearLayout>
+</ScrollView>

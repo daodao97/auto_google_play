@@ -1,0 +1,13 @@
+{
+  "accounts_file": "runtime/accounts.txt",
+  "output_root": "runtime/runs",
+  "concurrency": 1,
+  "retry_max": 0,
+  "country_code": "US",
+  "impersonate": "chrome136",
+  "proxy": "",
+  "proxy_template": "",
+  "mail_api_base": "http://127.0.0.1:8787",
+  "mail_app_token": "CHANGE_ME"
+}
+

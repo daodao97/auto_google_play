@@ -1,0 +1,2 @@
+-keep class com.company.iapaudit.hook.IapAuditHook { *; }
+-keep class de.robv.android.xposed.** { *; }

@@ -1,0 +1,5 @@
+name: money-printer
+
+include:
+  - Claude-register/compose.yaml
+  - ccmax_admin/compose.yaml

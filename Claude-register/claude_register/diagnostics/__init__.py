@@ -1,0 +1,1 @@
+"""Manually authorized diagnostic probes."""

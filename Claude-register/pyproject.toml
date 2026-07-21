@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-register"
+version = "0.1.0"
+description = "Local registration and session workflow orchestration service"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "certifi>=2024.2.2",
+    "curl-cffi>=0.7.0,<1",
+    "fastapi>=0.110,<1",
+    "pydantic>=2.9,<3",
+    "requests>=2.31.0,<3",
+    "uvicorn[standard]>=0.27,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "bandit==1.9.4",
+    "coverage==7.15.2",
+    "ruff==0.15.22",
+]
+
+[tool.setuptools.packages.find]
+include = ["claude_register*"]
+
+[tool.setuptools.package-data]
+"claude_register.presentation" = ["static/*"]
+
+[tool.coverage.run]
+source = ["claude_register", "scripts"]
+
+[tool.coverage.report]
+fail_under = 82
+precision = 2
+show_missing = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
