@@ -37,7 +37,7 @@ jobs:
             user1@38.97.63.31 \
             "sudo -n bash -lc '
               set -e
-              cd /opt/money-printer
+              cd /opt/auto_google_play
               git pull --ff-only origin main
               docker compose config >/dev/null
               (cd Claude-register && docker compose down --remove-orphans)
@@ -53,8 +53,8 @@ jobs:
         run: |
           curl --fail --silent --show-error --retry 3 \
             --request POST "$BARK_PUSH_URL" \
-            --data-urlencode "title=money-printer 部署成功" \
+            --data-urlencode "title=auto_google_play 部署成功" \
             --data-urlencode "body=Claude-register 与 ccmax_admin 已通过根目录 Compose 成功部署到生产环境
           分支：main
           提交：$COMMIT_SHA" \
-            --data-urlencode "group=money-printer-deploy"
+            --data-urlencode "group=auto_google_play-deploy"
