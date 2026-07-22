@@ -40,8 +40,6 @@ jobs:
               cd /opt/auto_google_play
               git pull --ff-only origin main
               docker compose config >/dev/null
-              (cd Claude-register && docker compose down --remove-orphans)
-              (cd ccmax_admin && docker compose down --remove-orphans)
               docker compose up -d --build --remove-orphans
             '"
 
