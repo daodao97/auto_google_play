@@ -17,8 +17,8 @@ import ChatGPTTasksView from '@/views/ChatGPTTasksView.vue'
 
 const router = createRouter({ history: createWebHistory(), routes: [
   { path: '/admin/login', component: LoginView, meta: { public: true } },
-  { path: '/', component: RedeemView, meta: { guestAllowed: true } },
-  { path: '/redeem', component: RedeemView, meta: { guestAllowed: true } },
+  { path: '/', component: RedeemView, meta: { guestAllowed: true, title: 'ChatGPT 升级兑换' } },
+  { path: '/redeem', component: RedeemView, meta: { guestAllowed: true, title: 'ChatGPT 升级兑换' } },
   { path: '/admin', redirect: '/admin/dashboard' },
   { path: '/admin/dashboard', component: DashboardView },
   { path: '/admin/accounts', component: AccountsView },
@@ -41,5 +41,8 @@ router.beforeEach(async to => {
   if (!auth.user) { try { await auth.load() } catch { return '/admin/login' } }
   if (to.meta.superAdmin && auth.user?.role !== 'super_admin') return '/admin/dashboard'
   return true
+})
+router.afterEach(to => {
+  document.title = typeof to.meta.title === 'string' ? to.meta.title : 'CCMax 管理后台'
 })
 export default router
