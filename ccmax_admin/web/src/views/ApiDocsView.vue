@@ -14,7 +14,9 @@ type EndpointKey =
   | "googleDispatch"
   | "googleReport"
   | "mailDispatch"
-  | "mailReport";
+  | "mailReport"
+  | "cdkCheck"
+  | "cdkRedeem";
 interface Endpoint {
   key: EndpointKey;
   title: string;
@@ -586,6 +588,34 @@ const endpoints: Endpoint[] = [
       },
     },
   },
+  {
+    key: "cdkCheck",
+    title: "查询 ChatGPT CDK 是否可用",
+    method: "POST",
+    path: "/api/chatgpt/cdk/check",
+    summary: "按 CDK 查询套餐及可用状态。接口只返回兑换状态，不会暴露关联订单或任务错误详情。",
+    sideEffect: false,
+    headers: [{ name: "X-API-Key", required: true, description: "在“API Key”菜单创建的密钥" }],
+    fields: [{ name: "code", type: "string", required: true, description: "后台生成的 UUID CDK" }],
+    request: { code: "550e8400-e29b-41d4-a716-446655440000" },
+    response: { data: { code: "550e8400-e29b-41d4-a716-446655440000", sku: "pro", available: true, used: false, status: "available" } },
+  },
+  {
+    key: "cdkRedeem",
+    title: "提交 ChatGPT CDK 兑换任务",
+    method: "POST",
+    path: "/api/chatgpt/cdk/redeem",
+    summary: "校验并原子占用 CDK，由服务端调用三方升级 API。创建成功后返回本地随机 Hash taskId，不暴露自增 ID 或三方任务 ID；使用 GET /api/chatgpt/cdk/tasks/{taskId} 查询最终状态。",
+    sideEffect: true,
+    headers: [{ name: "X-API-Key", required: true, description: "在“API Key”菜单创建的密钥" }],
+    fields: [
+      { name: "code", type: "string", required: true, description: "可用 CDK" },
+      { name: "channel", type: "string", required: true, description: "非空升级渠道，如 official" },
+      { name: "session", type: "string", required: true, description: "JSON 序列化后的 Session 字符串，不能直接传对象" },
+    ],
+    request: { code: "550e8400-e29b-41d4-a716-446655440000", channel: "official", session: "{\"accessToken\":\"example_token\",\"userId\":\"123456\"}" },
+    response: { data: { taskId: "ctk_2gR8vL7kYpQ4mN6xT1cD9aB3sE0", status: "pending", createdAt: "2026-07-21T11:30:00.000Z" } },
+  },
 ];
 
 const apiKey = ref("");
@@ -604,6 +634,8 @@ const bodies = reactive<Record<EndpointKey, string>>({
   googleReport: JSON.stringify(endpoints[9].request, null, 2),
   mailDispatch: JSON.stringify(endpoints[10].request, null, 2),
   mailReport: JSON.stringify(endpoints[11].request, null, 2),
+  cdkCheck: JSON.stringify(endpoints[12].request, null, 2),
+  cdkRedeem: JSON.stringify(endpoints[13].request, null, 2),
 });
 const results = reactive<
   Record<
@@ -623,6 +655,8 @@ const results = reactive<
   googleReport: {},
   mailDispatch: {},
   mailReport: {},
+  cdkCheck: {},
+  cdkRedeem: {},
 });
 const loading = reactive<Record<EndpointKey, boolean>>({
   add: false,
@@ -637,6 +671,8 @@ const loading = reactive<Record<EndpointKey, boolean>>({
   googleReport: false,
   mailDispatch: false,
   mailReport: false,
+  cdkCheck: false,
+  cdkRedeem: false,
 });
 const origin = computed(() =>
   typeof location === "undefined" ? "http://127.0.0.1:4001" : location.origin,

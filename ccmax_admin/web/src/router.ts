@@ -11,27 +11,35 @@ import OrdersView from '@/views/OrdersView.vue'
 import ApiKeysView from '@/views/ApiKeysView.vue'
 import AdminsView from '@/views/AdminsView.vue'
 import ApiDocsView from '@/views/ApiDocsView.vue'
+import ChatGPTCDKsView from '@/views/ChatGPTCDKsView.vue'
+import RedeemView from '@/views/RedeemView.vue'
+import ChatGPTTasksView from '@/views/ChatGPTTasksView.vue'
 
 const router = createRouter({ history: createWebHistory(), routes: [
-  { path: '/login', component: LoginView, meta: { public: true } },
-  { path: '/', redirect: '/dashboard' },
-  { path: '/dashboard', component: DashboardView },
-  { path: '/accounts', component: AccountsView },
-  { path: '/google-accounts', component: GoogleAccountsView },
-  { path: '/mail-accounts', component: MailAccountsView },
-  { path: '/registration', component: RegistrationView },
-  { path: '/cards', component: CardsView },
-  { path: '/orders', component: OrdersView },
-  { path: '/api-keys', component: ApiKeysView },
-  { path: '/api-docs', component: ApiDocsView },
-  { path: '/admins', component: AdminsView, meta: { superAdmin: true } },
-  { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
+  { path: '/admin/login', component: LoginView, meta: { public: true } },
+  { path: '/redeem', component: RedeemView, meta: { guestAllowed: true } },
+  { path: '/', redirect: '/admin' },
+  { path: '/admin', redirect: '/admin/dashboard' },
+  { path: '/admin/dashboard', component: DashboardView },
+  { path: '/admin/accounts', component: AccountsView },
+  { path: '/admin/google-accounts', component: GoogleAccountsView },
+  { path: '/admin/mail-accounts', component: MailAccountsView },
+  { path: '/admin/registration', component: RegistrationView },
+  { path: '/admin/cards', component: CardsView },
+  { path: '/admin/orders', component: OrdersView },
+  { path: '/admin/chatgpt-cdks', component: ChatGPTCDKsView },
+  { path: '/admin/chatgpt-tasks', component: ChatGPTTasksView },
+  { path: '/admin/api-keys', component: ApiKeysView },
+  { path: '/admin/api-docs', component: ApiDocsView },
+  { path: '/admin/admins', component: AdminsView, meta: { superAdmin: true } },
+  { path: '/:pathMatch(.*)*', redirect: '/admin' },
 ]})
 router.beforeEach(async to => {
   const auth = useAuthStore()
-  if (to.meta.public) return auth.user ? '/dashboard' : true
-  if (!auth.user) { try { await auth.load() } catch { return '/login' } }
-  if (to.meta.superAdmin && auth.user?.role !== 'super_admin') return '/dashboard'
+  if (to.meta.guestAllowed) return true
+  if (to.meta.public) return auth.user ? '/admin/dashboard' : true
+  if (!auth.user) { try { await auth.load() } catch { return '/admin/login' } }
+  if (to.meta.superAdmin && auth.user?.role !== 'super_admin') return '/admin/dashboard'
   return true
 })
 export default router

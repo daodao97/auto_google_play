@@ -255,3 +255,28 @@ func loginForTest(t *testing.T, router http.Handler, username, password string) 
 	t.Fatalf("login %s returned no session cookie", username)
 	return nil
 }
+
+func TestAdminCanDisableEnableAndDeleteAPIKey(t *testing.T) {
+	env := newIntegrationEnv(t)
+	created := adminRequest(t, env, http.MethodPost, "/api/admin/api-keys", `{"name":"removable-key"}`)
+	requireStatus(t, created, http.StatusOK)
+	data := responseData(t, created)
+	id := numericID(t, data, "id")
+	token, _ := data["key"].(string)
+	checkPath := "/api/chatgpt/cdk/check"
+	body := `{"code":"missing-code"}`
+
+	requireStatus(t, requestWithAPIKey(t, env.router, http.MethodPost, checkPath, token, body), http.StatusNotFound)
+	requireStatus(t, adminRequest(t, env, http.MethodPatch, fmt.Sprintf("/api/admin/api-keys/%d/status", id), `{"status":-1}`), http.StatusOK)
+	requireStatus(t, requestWithAPIKey(t, env.router, http.MethodPost, checkPath, token, body), http.StatusUnauthorized)
+	requireStatus(t, adminRequest(t, env, http.MethodPatch, fmt.Sprintf("/api/admin/api-keys/%d/status", id), `{"status":1}`), http.StatusOK)
+	requireStatus(t, requestWithAPIKey(t, env.router, http.MethodPost, checkPath, token, body), http.StatusNotFound)
+	requireStatus(t, adminRequest(t, env, http.MethodDelete, fmt.Sprintf("/api/admin/api-keys/%d", id), ""), http.StatusOK)
+	requireStatus(t, requestWithAPIKey(t, env.router, http.MethodPost, checkPath, token, body), http.StatusUnauthorized)
+	listed := adminRequest(t, env, http.MethodGet, "/api/admin/api-keys", "")
+	requireStatus(t, listed, http.StatusOK)
+	if strings.Contains(listed.Body.String(), "removable-key") {
+		t.Fatalf("deleted key remained visible: %s", listed.Body.String())
+	}
+	requireStatus(t, adminRequest(t, env, http.MethodPatch, fmt.Sprintf("/api/admin/api-keys/%d/status", id), `{"status":1}`), http.StatusNotFound)
+}

@@ -17,6 +17,8 @@ type Config struct {
 	BootstrapPass     string
 	ClaudeCheckProxy  string
 	ClaudeRegisterURL string
+	ChatGPTRedeemURL  string
+	ChatGPTRedeemKey  string
 }
 
 func Load() Config {
@@ -31,6 +33,8 @@ func Load() Config {
 		BootstrapPass:     env("BOOTSTRAP_ADMIN_PASSWORD", ""),
 		ClaudeCheckProxy:  env("CLAUDE_CHECK_PROXY", ""),
 		ClaudeRegisterURL: env("CLAUDE_REGISTER_BASE_URL", "http://claude-register:8000"),
+		ChatGPTRedeemURL:  env("CHATGPT_REDEEM_BASE_URL", "https://example.com"),
+		ChatGPTRedeemKey:  env("CHATGPT_REDEEM_API_KEY", ""),
 	}
 }
 

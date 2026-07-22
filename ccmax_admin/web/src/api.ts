@@ -4,7 +4,7 @@ export const http = axios.create({ baseURL: '/api', withCredentials: true, timeo
 http.interceptors.response.use(
   response => response,
   error => {
-    if (error.response?.status === 401 && !location.pathname.startsWith('/login')) location.href = '/login'
+    if (error.response?.status === 401 && location.pathname !== '/admin/login') location.href = '/admin/login'
     return Promise.reject(error)
   },
 )

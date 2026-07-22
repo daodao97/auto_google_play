@@ -16,27 +16,29 @@ import {
 const route = useRoute(),
   router = useRouter(),
   auth = useAuthStore();
-const isLogin = computed(() => route.path === "/login");
+const isStandalone = computed(() => route.path === "/admin/login" || route.path === "/redeem");
 const titles: Record<string, string> = {
-  "/dashboard": "仪表盘",
-  "/accounts": "Claude 账号池",
-  "/google-accounts": "Google 账号池",
-  "/mail-accounts": "邮箱账号池",
-  "/registration": "注册机",
-  "/cards": "Card 池",
-  "/orders": "订单管理",
-  "/api-keys": "API Key",
-  "/api-docs": "API 文档",
-  "/admins": "管理员",
+  "/admin/dashboard": "仪表盘",
+  "/admin/accounts": "Claude 账号池",
+  "/admin/google-accounts": "Google 账号池",
+  "/admin/mail-accounts": "邮箱账号池",
+  "/admin/registration": "注册机",
+  "/admin/cards": "Card 池",
+  "/admin/orders": "订单管理",
+  "/admin/chatgpt-cdks": "ChatGPT CDK",
+  "/admin/chatgpt-tasks": "ChatGPT 任务",
+  "/admin/api-keys": "API Key",
+  "/admin/api-docs": "API 文档",
+  "/admin/admins": "管理员",
 };
 async function logout() {
   await auth.logout();
-  await router.push("/login");
+  await router.push("/admin/login");
 }
 </script>
 
 <template>
-  <RouterView v-if="isLogin" />
+  <RouterView v-if="isStandalone" />
   <el-container v-else class="shell">
     <el-aside width="232px" class="sidebar">
       <div class="brand">
@@ -44,34 +46,40 @@ async function logout() {
         <div><strong>CCMax</strong><small>运营管理后台</small></div>
       </div>
       <el-menu router :default-active="route.path" class="nav">
-        <el-menu-item index="/dashboard"
+        <el-menu-item index="/admin/dashboard"
           ><el-icon><DataAnalysis /></el-icon><span>仪表盘</span></el-menu-item
         >
-        <el-menu-item index="/mail-accounts"
+        <el-menu-item index="/admin/mail-accounts"
           ><el-icon><User /></el-icon><span>邮箱账号池</span></el-menu-item
         >
-        <el-menu-item index="/registration"
+        <el-menu-item index="/admin/registration"
           ><el-icon><Setting /></el-icon><span>注册机</span></el-menu-item
         >
-        <el-menu-item index="/accounts"
+        <el-menu-item index="/admin/accounts"
           ><el-icon><User /></el-icon><span>Claude 账号池</span></el-menu-item
         >
-        <el-menu-item index="/google-accounts"
+        <el-menu-item index="/admin/google-accounts"
           ><el-icon><User /></el-icon><span>Google 账号池</span></el-menu-item
         >
-        <el-menu-item index="/cards"
+        <el-menu-item index="/admin/cards"
           ><el-icon><CreditCard /></el-icon><span>Card 池</span></el-menu-item
         >
-        <el-menu-item index="/orders"
+        <el-menu-item index="/admin/orders"
           ><el-icon><Tickets /></el-icon><span>订单管理</span></el-menu-item
         >
-        <el-menu-item index="/api-keys"
+        <el-menu-item index="/admin/chatgpt-cdks"
+          ><el-icon><Tickets /></el-icon><span>ChatGPT CDK</span></el-menu-item
+        >
+        <el-menu-item index="/admin/chatgpt-tasks"
+          ><el-icon><Document /></el-icon><span>ChatGPT 任务</span></el-menu-item
+        >
+        <el-menu-item index="/admin/api-keys"
           ><el-icon><Key /></el-icon><span>API Key</span></el-menu-item
         >
-        <el-menu-item index="/api-docs"
+        <el-menu-item index="/admin/api-docs"
           ><el-icon><Document /></el-icon><span>API 文档</span></el-menu-item
         >
-        <el-menu-item v-if="auth.user?.role === 'super_admin'" index="/admins"
+        <el-menu-item v-if="auth.user?.role === 'super_admin'" index="/admin/admins"
           ><el-icon><Setting /></el-icon><span>管理员</span></el-menu-item
         >
       </el-menu>

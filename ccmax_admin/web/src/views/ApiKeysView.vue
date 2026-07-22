@@ -28,15 +28,32 @@ async function create() {
   }
 }
 async function toggle(row: any) {
-  await ElMessageBox.confirm(
-    `确定${row.status === 1 ? "禁用" : "启用"}该 API Key？`,
-  );
   try {
+    await ElMessageBox.confirm(
+      `确定${row.status === 1 ? "禁用" : "启用"}该 API Key？`,
+    );
     await http.patch(`/admin/api-keys/${row.id}/status`, {
       status: row.status === 1 ? -1 : 1,
     });
-    load();
+    ElMessage.success(row.status === 1 ? "API Key 已禁用" : "API Key 已启用");
+    await load();
   } catch (e) {
+    if (e === "cancel" || e === "close") return;
+    ElMessage.error(messageOf(e));
+  }
+}
+async function remove(row: any) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除 API Key“${row.name}”？删除后立即失效且不会再显示，历史调用记录会保留。`,
+      "删除 API Key",
+      { type: "warning", confirmButtonText: "删除", confirmButtonClass: "el-button--danger" },
+    );
+    await http.delete(`/admin/api-keys/${row.id}`);
+    ElMessage.success("API Key 已删除");
+    await load();
+  } catch (e) {
+    if (e === "cancel" || e === "close") return;
     ElMessage.error(messageOf(e));
   }
 }
@@ -72,13 +89,14 @@ onMounted(load);
             row.status === 1 ? "启用" : "禁用"
           }}</el-tag></template
         ></el-table-column
-      ><el-table-column label="操作"
+      ><el-table-column label="操作" width="150" fixed="right"
         ><template #default="{ row }"
           ><el-button
             link
             :type="row.status === 1 ? 'danger' : 'success'"
             @click="toggle(row)"
             >{{ row.status === 1 ? "禁用" : "启用" }}</el-button
+          ><el-button link type="danger" @click="remove(row)">删除</el-button
           ></template
         ></el-table-column
       ></el-table

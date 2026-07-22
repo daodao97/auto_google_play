@@ -276,7 +276,7 @@ func (s *Store) CreateAPIKey(ctx context.Context, name, prefix, hash string, adm
 }
 func (s *Store) APIKeyByHash(ctx context.Context, hash string) (*APIKey, error) {
 	k := &APIKey{}
-	err := s.DB.QueryRowContext(ctx, `SELECT id,name,key_prefix,status,last_used_at,expires_at,created_at FROM api_keys WHERE key_hash=? AND status=1 AND (expires_at IS NULL OR datetime(expires_at)>CURRENT_TIMESTAMP)`, hash).Scan(&k.ID, &k.Name, &k.Prefix, &k.Status, &k.LastUsedAt, &k.ExpiresAt, &k.CreatedAt)
+	err := s.DB.QueryRowContext(ctx, `SELECT id,name,key_prefix,status,last_used_at,expires_at,created_at FROM api_keys WHERE key_hash=? AND deleted_at IS NULL AND status=1 AND (expires_at IS NULL OR datetime(expires_at)>CURRENT_TIMESTAMP)`, hash).Scan(&k.ID, &k.Name, &k.Prefix, &k.Status, &k.LastUsedAt, &k.ExpiresAt, &k.CreatedAt)
 	return k, err
 }
 func (s *Store) TouchAPIKey(ctx context.Context, id int64) {
@@ -465,6 +465,9 @@ func (s *Store) Dashboard(ctx context.Context) (map[string]any, error) {
 	queries := map[string]string{
 		"freeAccounts":   `SELECT count(*) FROM claude_accounts a WHERE plan='free' AND status=1 AND alive_status<>'dead' AND delivery_status='available' AND NOT EXISTS(SELECT 1 FROM order_accounts oa WHERE oa.account_id=a.id)`,
 		"maxAccounts":    `SELECT count(*) FROM claude_accounts a WHERE plan='max_20x' AND status=1 AND alive_status<>'dead' AND delivery_status IN ('available','upgraded') AND NOT EXISTS(SELECT 1 FROM order_accounts oa WHERE oa.account_id=a.id)`,
+		"plusCDKs":       `SELECT count(*) FROM chatgpt_cdks c WHERE sku='plus' AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id)`,
+		"proCDKs":        `SELECT count(*) FROM chatgpt_cdks c WHERE sku='pro' AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id)`,
+		"proliteCDKs":    `SELECT count(*) FROM chatgpt_cdks c WHERE sku='prolite' AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id)`,
 		"availableCards": `SELECT count(*) FROM card_pool WHERE status=1`, "orders": `SELECT count(*) FROM orders`,
 		"todayDispatches": `SELECT count(*) FROM claude_account_dispatches WHERE created_at>=date('now','localtime')`,
 		"todaySalesCents": `SELECT COALESCE(sum(sale_price_cents),0) FROM orders WHERE status='allocated' AND created_at>=date('now','localtime')`,

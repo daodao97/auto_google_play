@@ -9,6 +9,8 @@ interface Order {
   salePriceCents: number;
   quantity: number;
   plan: string;
+  productType: "claude_account" | "chatgpt_cdk";
+  cdkSku: string;
   status: string;
   createdAt: string;
   downloadCount: number;
@@ -20,18 +22,25 @@ const items = ref<Order[]>([]),
   dialog = ref(false),
   detailDialog = ref(false),
   detail = ref<any>(),
-  filters = reactive({ q: "", plan: "", status: "" }),
+  filters = reactive({ q: "", productType: "", plan: "", cdkSku: "", status: "" }),
   pager = reactive({ page: 1, size: 20 }),
   form = reactive({
     batchNo: "",
     buyer: "",
     salePrice: "",
     quantity: 1,
+    productType: "claude_account",
     plan: "max_20x",
+    cdkSku: "plus",
     remark: "",
   });
-const inventory = reactive({ freeAccounts: 0, maxAccounts: 0 });
+const inventory = reactive({ freeAccounts: 0, maxAccounts: 0, plusCDKs: 0, proCDKs: 0, proliteCDKs: 0 });
 const detailText = computed(() => {
+	const cdks = detail.value?.cdks;
+	if (detail.value?.order?.productType === "chatgpt_cdk") {
+		if (!Array.isArray(cdks) || cdks.length === 0) return "";
+		return `${cdks.map((item: any) => item.code).join("\n")}\n`;
+	}
   const accounts = detail.value?.accounts;
   if (!Array.isArray(accounts) || accounts.length === 0) return "";
   return `${accounts
@@ -41,9 +50,11 @@ const detailText = computed(() => {
     )
     .join("\n")}\n`;
 });
-const availableCount = computed(() =>
-  form.plan === "max_20x" ? inventory.maxAccounts : inventory.freeAccounts,
-);
+const availableCount = computed(() => {
+  if (form.productType === "chatgpt_cdk") return inventory[`${form.cdkSku}CDKs` as "plusCDKs" | "proCDKs" | "proliteCDKs"];
+  return form.plan === "max_20x" ? inventory.maxAccounts : inventory.freeAccounts;
+});
+const selectedProduct = computed(() => form.productType === "chatgpt_cdk" ? `ChatGPT ${form.cdkSku}` : `Claude ${form.plan}`);
 const cannotCreate = computed(
   () =>
     !form.batchNo ||
@@ -61,6 +72,9 @@ async function loadInventory() {
     const data = (await http.get("/admin/dashboard")).data.data;
     inventory.freeAccounts = Number(data.freeAccounts || 0);
     inventory.maxAccounts = Number(data.maxAccounts || 0);
+    inventory.plusCDKs = Number(data.plusCDKs || 0);
+    inventory.proCDKs = Number(data.proCDKs || 0);
+    inventory.proliteCDKs = Number(data.proliteCDKs || 0);
   } catch (e) {
     ElMessage.error(messageOf(e));
   }
@@ -71,7 +85,9 @@ function openCreate() {
     buyer: "",
     salePrice: "",
     quantity: 1,
+    productType: "claude_account",
     plan: "max_20x",
+    cdkSku: "plus",
     remark: "",
   });
   dialog.value = true;
@@ -80,8 +96,11 @@ function openCreate() {
 async function load() {
   loading.value = true;
   try {
+    const params = { ...filters, ...pager };
+    if (params.productType === "chatgpt_cdk") params.plan = "";
+    else params.cdkSku = "";
     const r = (
-      await http.get("/admin/orders", { params: { ...filters, ...pager } })
+      await http.get("/admin/orders", { params })
     ).data.data;
     items.value = r.items;
     total.value = r.total;
@@ -94,7 +113,7 @@ async function load() {
 async function create() {
   if (form.quantity > availableCount.value) {
     ElMessage.warning(
-      `库存不足，${form.plan} 当前仅可售 ${availableCount.value} 个`,
+      `库存不足，${selectedProduct.value} 当前仅可售 ${availableCount.value} 个`,
     );
     return;
   }
@@ -105,10 +124,12 @@ async function create() {
       buyer: form.buyer,
       salePriceCents: cents,
       quantity: form.quantity,
+      productType: form.productType,
       plan: form.plan,
+      cdkSku: form.cdkSku,
       remark: form.remark,
     });
-    ElMessage.success("订单已创建并完成账号分配");
+    ElMessage.success("订单已创建并完成商品分配");
     dialog.value = false;
     load();
     loadInventory();
@@ -130,7 +151,7 @@ function download(row: Order) {
 }
 async function copyDetailAccounts() {
   if (!detailText.value) {
-    ElMessage.warning("暂无账号内容可复制");
+    ElMessage.warning("暂无商品内容可复制");
     return;
   }
   try {
@@ -147,13 +168,13 @@ async function copyDetailAccounts() {
       textarea.remove();
       if (!copied) throw new Error("copy failed");
     }
-    ElMessage.success("账号内容已复制");
+    ElMessage.success("商品内容已复制");
   } catch {
     ElMessage.error("复制失败，请手动选择复制");
   }
 }
 async function cancel(row: Order) {
-  await ElMessageBox.confirm("取消后账号会释放回库存，确定继续？");
+  await ElMessageBox.confirm("取消后商品会释放回库存，确定继续？");
   try {
     await http.post(`/admin/orders/${row.id}/cancel`);
     ElMessage.success("订单已取消");
@@ -176,10 +197,14 @@ onMounted(() => {
           v-model="filters.q"
           placeholder="批次号 / 购买人"
           clearable
-        /><el-select v-model="filters.plan" placeholder="全部计划" clearable
+        /><el-select v-model="filters.productType" placeholder="全部商品" clearable
+          ><el-option label="Claude Account" value="claude_account" /><el-option label="ChatGPT CDK" value="chatgpt_cdk" /></el-select
+        ><el-select v-if="filters.productType !== 'chatgpt_cdk'" v-model="filters.plan" placeholder="全部计划" clearable
           ><el-option label="Free" value="free" /><el-option
             label="Max 20x"
             value="max_20x" /></el-select
+        ><el-select v-else v-model="filters.cdkSku" placeholder="全部 SKU" clearable
+          ><el-option label="Plus" value="plus" /><el-option label="Pro" value="pro" /><el-option label="Pro Lite" value="prolite" /></el-select
         ><el-select v-model="filters.status" placeholder="全部状态" clearable
           ><el-option label="已分配" value="allocated" /><el-option
             label="已取消"
@@ -197,12 +222,14 @@ onMounted(() => {
         prop="buyer"
         label="购买人"
         min-width="130"
-      /><el-table-column label="计划" width="105"
+      /><el-table-column label="商品类型" width="145"
         ><template #default="{ row }"
-          ><el-tag :type="row.plan === 'max_20x' ? 'success' : 'info'">{{
-            row.plan
+          ><el-tag :type="row.productType === 'chatgpt_cdk' ? 'warning' : 'info'">{{
+            row.productType === "chatgpt_cdk" ? "ChatGPT CDK" : "Claude Account"
           }}</el-tag></template
         ></el-table-column
+      ><el-table-column label="套餐 / SKU" width="115"
+        ><template #default="{ row }"><el-tag :type="row.productType === 'chatgpt_cdk' || row.plan === 'max_20x' ? 'success' : 'info'">{{ row.productType === "chatgpt_cdk" ? row.cdkSku : row.plan }}</el-tag></template></el-table-column
       ><el-table-column
         prop="quantity"
         label="数量"
@@ -253,7 +280,7 @@ onMounted(() => {
         @change="load"
       /></div
   ></el-card>
-  <el-dialog v-model="dialog" title="新建订单并分配账号" width="620"
+  <el-dialog v-model="dialog" title="新建订单并分配商品" width="680"
     ><el-form label-position="top"
       ><el-row :gutter="16"
         ><el-col :span="12"
@@ -263,14 +290,16 @@ onMounted(() => {
           ><el-form-item label="购买人"
             ><el-input v-model="form.buyer" /></el-form-item></el-col></el-row
       ><el-row :gutter="16"
+        ><el-col :span="8"><el-form-item label="商品类型"><el-select v-model="form.productType" style="width:100%"><el-option label="Claude Account" value="claude_account" /><el-option label="ChatGPT CDK" value="chatgpt_cdk" /></el-select></el-form-item></el-col
         ><el-col :span="8"
-          ><el-form-item label="计划"
-            ><el-select v-model="form.plan" style="width: 100%"
+          ><el-form-item :label="form.productType === 'chatgpt_cdk' ? 'CDK SKU' : '账号计划'"
+            ><el-select v-if="form.productType === 'claude_account'" v-model="form.plan" style="width: 100%"
               ><el-option
                 :label="`Free（可售 ${inventory.freeAccounts}）`"
                 value="free" /><el-option
                 :label="`Max 20x（可售 ${inventory.maxAccounts}）`"
-                value="max_20x" /></el-select></el-form-item></el-col
+                value="max_20x" /></el-select
+            ><el-select v-else v-model="form.cdkSku" style="width:100%"><el-option :label="`Plus（可售 ${inventory.plusCDKs}）`" value="plus" /><el-option :label="`Pro（可售 ${inventory.proCDKs}）`" value="pro" /><el-option :label="`Pro Lite（可售 ${inventory.proliteCDKs}）`" value="prolite" /></el-select></el-form-item></el-col
         ><el-col :span="8"
           ><el-form-item label="数量"
             ><el-input-number
@@ -279,19 +308,19 @@ onMounted(() => {
               :max="Math.max(1, availableCount)"
               :disabled="availableCount === 0"
               style="width: 100%" /></el-form-item></el-col
-        ><el-col :span="8"
+        ></el-row><el-row :gutter="16"><el-col :span="8"
           ><el-form-item label="售卖总价"
             ><el-input
               v-model="form.salePrice"
               prefix-icon="Money" /></el-form-item></el-col></el-row
       ><el-alert
         v-if="availableCount === 0"
-        :title="`${form.plan} 当前没有可售账号，无法创建订单`"
+        :title="`${selectedProduct} 当前没有可售库存，无法创建订单`"
         type="error"
         :closable="false"
         show-icon /><el-alert
         v-else
-        :title="`${form.plan} 当前可售 ${availableCount} 个账号`"
+        :title="`${selectedProduct} 当前可售 ${availableCount} 个`"
         type="success"
         :closable="false"
         show-icon /><el-form-item label="备注" style="margin-top: 16px"
@@ -305,7 +334,7 @@ onMounted(() => {
       ></template
     ></el-dialog
   >
-  <el-dialog v-model="detailDialog" title="订单账号明细" width="850"
+  <el-dialog v-model="detailDialog" title="订单商品明细" width="850"
     ><el-descriptions v-if="detail" :column="4" border
       ><el-descriptions-item label="批次号">{{
         detail.order.batchNo
@@ -313,15 +342,15 @@ onMounted(() => {
       ><el-descriptions-item label="购买人">{{
         detail.order.buyer
       }}</el-descriptions-item
-      ><el-descriptions-item label="计划">{{
-        detail.order.plan
+      ><el-descriptions-item label="商品">{{
+        detail.order.productType === "chatgpt_cdk" ? `ChatGPT CDK / ${detail.order.cdkSku}` : `Claude Account / ${detail.order.plan}`
       }}</el-descriptions-item
       ><el-descriptions-item label="数量">{{
         detail.order.quantity
       }}</el-descriptions-item></el-descriptions
     >
     <div v-if="detail" class="order-account-output-head">
-      <strong>账号内容（与下载 TXT 格式一致）</strong>
+      <strong>{{ detail.order.productType === "chatgpt_cdk" ? "CDK 内容" : "账号内容" }}（与下载 TXT 格式一致）</strong>
       <el-button
         type="primary"
         plain

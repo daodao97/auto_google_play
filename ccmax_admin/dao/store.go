@@ -162,7 +162,176 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.migrateRegistrationRuns(ctx); err != nil {
 		return err
 	}
-	return s.migrateRegistrationSchedule(ctx)
+	if err := s.migrateRegistrationSchedule(ctx); err != nil {
+		return err
+	}
+	if err := s.migrateChatGPTCDKs(ctx); err != nil {
+		return err
+	}
+	if err := s.migrateProductOrders(ctx); err != nil {
+		return err
+	}
+	if err := s.migrateAPIKeySoftDelete(ctx); err != nil {
+		return err
+	}
+	return s.migrateChatGPTTasks(ctx)
+}
+
+func (s *Store) migrateChatGPTCDKs(ctx context.Context) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS chatgpt_cdks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL COLLATE NOCASE UNIQUE,
+			sku TEXT NOT NULL CHECK(sku IN ('plus','pro','prolite')),
+			status TEXT NOT NULL DEFAULT 'available' CHECK(status IN ('available','redeeming','used')),
+			order_no TEXT NOT NULL DEFAULT '', remark TEXT NOT NULL DEFAULT '', used_at DATETIME, task_id INTEGER,
+			created_by INTEGER NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(created_by) REFERENCES admin_users(id))`,
+		`CREATE INDEX IF NOT EXISTS idx_chatgpt_cdks_filter ON chatgpt_cdks(sku,status,created_at)`,
+		`INSERT OR IGNORE INTO schema_migrations(version) VALUES(12)`,
+	}
+	for _, statement := range statements {
+		if _, err := s.DB.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("chatgpt cdk migration failed: %w", err)
+		}
+	}
+	columns := []struct{ name, definition string }{
+		{"order_no", `TEXT NOT NULL DEFAULT ''`},
+		{"remark", `TEXT NOT NULL DEFAULT ''`},
+		{"task_id", `INTEGER`},
+	}
+	for _, column := range columns {
+		exists, err := s.columnExists(ctx, "chatgpt_cdks", column.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err = s.DB.ExecContext(ctx, `ALTER TABLE chatgpt_cdks ADD COLUMN `+column.name+` `+column.definition); err != nil {
+				return fmt.Errorf("add chatgpt_cdks.%s: %w", column.name, err)
+			}
+		}
+	}
+	legacyOrder, err := s.columnExists(ctx, "chatgpt_cdks", "related_order")
+	if err != nil {
+		return err
+	}
+	if legacyOrder {
+		if _, err = s.DB.ExecContext(ctx, `UPDATE chatgpt_cdks SET order_no=related_order WHERE order_no='' AND related_order<>''`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrateChatGPTTasks(ctx context.Context) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS chatgpt_tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, hash_id TEXT NOT NULL UNIQUE, cdk_id INTEGER NOT NULL, cdk_code TEXT NOT NULL,
+			user_email TEXT NOT NULL DEFAULT '', session TEXT NOT NULL, sku TEXT NOT NULL,
+			channel TEXT NOT NULL, api_key_id INTEGER, remote_task_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'creating', result_json TEXT NOT NULL DEFAULT '',
+			error_code TEXT NOT NULL DEFAULT '', error_message TEXT NOT NULL DEFAULT '', client_ip TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			finished_at DATETIME, FOREIGN KEY(cdk_id) REFERENCES chatgpt_cdks(id), FOREIGN KEY(api_key_id) REFERENCES api_keys(id))`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_chatgpt_tasks_remote ON chatgpt_tasks(remote_task_id) WHERE remote_task_id<>''`,
+		`CREATE INDEX IF NOT EXISTS idx_chatgpt_tasks_cdk ON chatgpt_tasks(cdk_id,created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_chatgpt_tasks_status ON chatgpt_tasks(status,updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_chatgpt_tasks_email ON chatgpt_tasks(user_email,created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_chatgpt_cdks_local_task ON chatgpt_cdks(task_id)`,
+		`INSERT OR IGNORE INTO schema_migrations(version) VALUES(15)`,
+	}
+	for _, statement := range statements {
+		if _, err := s.DB.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("chatgpt task migration failed: %w", err)
+		}
+	}
+	hashExists, err := s.columnExists(ctx, "chatgpt_tasks", "hash_id")
+	if err != nil {
+		return err
+	}
+	if !hashExists {
+		if _, err = s.DB.ExecContext(ctx, `ALTER TABLE chatgpt_tasks ADD COLUMN hash_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add chatgpt_tasks.hash_id: %w", err)
+		}
+	}
+	if _, err = s.DB.ExecContext(ctx, `UPDATE chatgpt_tasks SET hash_id='ctk_'||lower(hex(randomblob(20))) WHERE hash_id=''`); err != nil {
+		return err
+	}
+	if _, err = s.DB.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_chatgpt_tasks_hash ON chatgpt_tasks(hash_id)`); err != nil {
+		return err
+	}
+	legacyTaskID, err := s.columnExists(ctx, "chatgpt_cdks", "redeem_task_id")
+	if err != nil {
+		return err
+	}
+	if legacyTaskID {
+		legacySQL := `INSERT OR IGNORE INTO chatgpt_tasks(hash_id,cdk_id,cdk_code,user_email,session,sku,channel,api_key_id,remote_task_id,status,error_code,error_message,created_at,updated_at,finished_at)
+			SELECT 'ctk_'||lower(hex(randomblob(20))),id,code,'','',sku,'official',redeemed_by_api_key_id,redeem_task_id,
+			CASE WHEN task_status='' THEN 'pending' ELSE task_status END,task_error_code,task_error_message,COALESCE(used_at,created_at),updated_at,
+			CASE WHEN task_status IN ('success','failed') THEN updated_at ELSE NULL END
+			FROM chatgpt_cdks WHERE redeem_task_id<>''`
+		if _, err = s.DB.ExecContext(ctx, legacySQL); err != nil {
+			return fmt.Errorf("migrate legacy chatgpt tasks: %w", err)
+		}
+		if _, err = s.DB.ExecContext(ctx, `UPDATE chatgpt_cdks SET task_id=(SELECT t.id FROM chatgpt_tasks t WHERE t.remote_task_id=chatgpt_cdks.redeem_task_id) WHERE task_id IS NULL AND redeem_task_id<>''`); err != nil {
+			return err
+		}
+		if _, err = s.DB.ExecContext(ctx, `UPDATE chatgpt_cdks SET redeem_task_id='',redeemed_by_api_key_id=NULL,task_status='',task_error_code='',task_error_message='' WHERE task_id IS NOT NULL`); err != nil {
+			return err
+		}
+	}
+	_, err = s.DB.ExecContext(ctx, `UPDATE chatgpt_cdks SET status='available',task_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE status='redeeming' AND task_id IS NULL AND updated_at<=datetime('now','-2 minutes')`)
+	return err
+}
+
+func (s *Store) migrateProductOrders(ctx context.Context) error {
+	columns := []struct{ name, definition string }{
+		{"product_type", `TEXT NOT NULL DEFAULT 'claude_account' CHECK(product_type IN ('claude_account','chatgpt_cdk'))`},
+		{"cdk_sku", `TEXT NOT NULL DEFAULT '' CHECK(cdk_sku IN ('','plus','pro','prolite'))`},
+	}
+	for _, column := range columns {
+		exists, err := s.columnExists(ctx, "orders", column.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err = s.DB.ExecContext(ctx, `ALTER TABLE orders ADD COLUMN `+column.name+` `+column.definition); err != nil {
+				return fmt.Errorf("add orders.%s: %w", column.name, err)
+			}
+		}
+	}
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS order_cdks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL, cdk_id INTEGER NOT NULL UNIQUE,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(order_id,cdk_id),
+			FOREIGN KEY(order_id) REFERENCES orders(id), FOREIGN KEY(cdk_id) REFERENCES chatgpt_cdks(id))`,
+		`CREATE INDEX IF NOT EXISTS idx_order_cdks_order ON order_cdks(order_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_orders_product ON orders(product_type,cdk_sku,status)`,
+		`INSERT OR IGNORE INTO schema_migrations(version) VALUES(13)`,
+	}
+	for _, statement := range statements {
+		if _, err := s.DB.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("product order migration failed: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrateAPIKeySoftDelete(ctx context.Context) error {
+	exists, err := s.columnExists(ctx, "api_keys", "deleted_at")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err = s.DB.ExecContext(ctx, `ALTER TABLE api_keys ADD COLUMN deleted_at DATETIME`); err != nil {
+			return fmt.Errorf("add api_keys.deleted_at: %w", err)
+		}
+	}
+	if _, err = s.DB.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(deleted_at,status)`); err != nil {
+		return err
+	}
+	_, err = s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES(14)`)
+	return err
 }
 
 func (s *Store) migrateAccountLease(ctx context.Context) error {

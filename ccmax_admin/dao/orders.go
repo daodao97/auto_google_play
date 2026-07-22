@@ -16,6 +16,8 @@ type Order struct {
 	SalePriceCents int64      `json:"salePriceCents"`
 	Quantity       int        `json:"quantity"`
 	Plan           string     `json:"plan"`
+	ProductType    string     `json:"productType"`
+	CDKSKU         string     `json:"cdkSku"`
 	Status         string     `json:"status"`
 	Remark         string     `json:"remark"`
 	CreatedBy      int64      `json:"createdBy"`
@@ -24,18 +26,35 @@ type Order struct {
 	DownloadCount  int        `json:"downloadCount"`
 }
 
-const orderColumns = `o.id,o.batch_no,o.buyer,o.sale_price_cents,o.quantity,o.plan,o.status,o.remark,o.created_by,o.allocated_at,o.created_at,(SELECT count(*) FROM order_download_logs dl WHERE dl.order_id=o.id)`
+const orderColumns = `o.id,o.batch_no,o.buyer,o.sale_price_cents,o.quantity,o.plan,o.product_type,o.cdk_sku,o.status,o.remark,o.created_by,o.allocated_at,o.created_at,(SELECT count(*) FROM order_download_logs dl WHERE dl.order_id=o.id)`
 
 func scanOrder(row interface{ Scan(...any) error }) (*Order, error) {
 	o := &Order{}
-	err := row.Scan(&o.ID, &o.BatchNo, &o.Buyer, &o.SalePriceCents, &o.Quantity, &o.Plan, &o.Status, &o.Remark, &o.CreatedBy, &o.AllocatedAt, &o.CreatedAt, &o.DownloadCount)
+	err := row.Scan(&o.ID, &o.BatchNo, &o.Buyer, &o.SalePriceCents, &o.Quantity, &o.Plan, &o.ProductType, &o.CDKSKU, &o.Status, &o.Remark, &o.CreatedBy, &o.AllocatedAt, &o.CreatedAt, &o.DownloadCount)
 	return o, err
 }
 
 func (s *Store) CreateOrder(ctx context.Context, o Order, adminID int64) (*Order, error) {
-	plan, err := NormalizePlan(o.Plan)
-	if err != nil {
-		return nil, err
+	o.ProductType = strings.TrimSpace(o.ProductType)
+	if o.ProductType == "" {
+		o.ProductType = "claude_account"
+	}
+	if o.ProductType != "claude_account" && o.ProductType != "chatgpt_cdk" {
+		return nil, errors.New("productType must be claude_account or chatgpt_cdk")
+	}
+	plan := "free"
+	var err error
+	if o.ProductType == "claude_account" {
+		plan, err = NormalizePlan(o.Plan)
+		if err != nil {
+			return nil, err
+		}
+		o.CDKSKU = ""
+	} else {
+		o.CDKSKU = strings.ToLower(strings.TrimSpace(o.CDKSKU))
+		if !ValidChatGPTSKU(o.CDKSKU) {
+			return nil, errors.New("cdkSku must be plus, pro or prolite")
+		}
 	}
 	o.BatchNo = strings.TrimSpace(o.BatchNo)
 	o.Buyer = strings.TrimSpace(o.Buyer)
@@ -53,7 +72,7 @@ func (s *Store) CreateOrder(ctx context.Context, o Order, adminID int64) (*Order
 	if _, err := tx.ExecContext(ctx, `UPDATE claude_accounts SET delivery_status='available',locked_until=NULL,updated_at=CURRENT_TIMESTAMP WHERE delivery_status='locked' AND locked_until IS NOT NULL AND locked_until<=unixepoch()`); err != nil {
 		return nil, err
 	}
-	r, err := tx.ExecContext(ctx, `INSERT INTO orders(batch_no,buyer,sale_price_cents,quantity,plan,remark,created_by) VALUES(?,?,?,?,?,?,?)`, o.BatchNo, o.Buyer, o.SalePriceCents, o.Quantity, plan, strings.TrimSpace(o.Remark), adminID)
+	r, err := tx.ExecContext(ctx, `INSERT INTO orders(batch_no,buyer,sale_price_cents,quantity,plan,product_type,cdk_sku,remark,created_by) VALUES(?,?,?,?,?,?,?,?,?)`, o.BatchNo, o.Buyer, o.SalePriceCents, o.Quantity, plan, o.ProductType, o.CDKSKU, strings.TrimSpace(o.Remark), adminID)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +80,13 @@ func (s *Store) CreateOrder(ctx context.Context, o Order, adminID int64) (*Order
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM claude_accounts a WHERE plan=? AND status=1 AND alive_status<>'dead' AND ((?='max_20x' AND delivery_status IN ('available','upgraded')) OR (?='free' AND delivery_status='available')) AND NOT EXISTS(SELECT 1 FROM order_accounts oa WHERE oa.account_id=a.id) ORDER BY id ASC LIMIT ?`, plan, plan, plan, o.Quantity)
+	selection := `SELECT id FROM claude_accounts a WHERE plan=? AND status=1 AND alive_status<>'dead' AND ((?='max_20x' AND delivery_status IN ('available','upgraded')) OR (?='free' AND delivery_status='available')) AND NOT EXISTS(SELECT 1 FROM order_accounts oa WHERE oa.account_id=a.id) ORDER BY id ASC LIMIT ?`
+	selectionArgs := []any{plan, plan, plan, o.Quantity}
+	if o.ProductType == "chatgpt_cdk" {
+		selection = `SELECT id FROM chatgpt_cdks c WHERE sku=? AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id) ORDER BY id ASC LIMIT ?`
+		selectionArgs = []any{o.CDKSKU, o.Quantity}
+	}
+	rows, err := tx.QueryContext(ctx, selection, selectionArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +101,18 @@ func (s *Store) CreateOrder(ctx context.Context, o Order, adminID int64) (*Order
 	}
 	rows.Close()
 	if len(ids) != o.Quantity {
+		if o.ProductType == "chatgpt_cdk" {
+			return nil, fmt.Errorf("insufficient chatgpt cdks: available=%d requested=%d", len(ids), o.Quantity)
+		}
 		return nil, fmt.Errorf("insufficient accounts: available=%d requested=%d", len(ids), o.Quantity)
 	}
 	for _, id := range ids {
+		if o.ProductType == "chatgpt_cdk" {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO order_cdks(order_id,cdk_id) VALUES(?,?)`, orderID, id); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO order_accounts(order_id,account_id) VALUES(?,?)`, orderID, id); err != nil {
 			return nil, err
 		}
@@ -102,9 +136,15 @@ func (s *Store) CreateOrder(ctx context.Context, o Order, adminID int64) (*Order
 func (s *Store) OrderByID(ctx context.Context, id int64) (*Order, error) {
 	return scanOrder(s.DB.QueryRowContext(ctx, `SELECT `+orderColumns+` FROM orders o WHERE o.id=?`, id))
 }
-func (s *Store) ListOrders(ctx context.Context, page, size int, query, plan, status string) ([]Order, int, error) {
+func (s *Store) ListOrders(ctx context.Context, page, size int, query, productType, plan, cdkSKU, status string) ([]Order, int, error) {
 	where := ` WHERE 1=1`
 	args := []any{}
+	if productType == "chatgpt_cdk" {
+		plan = ""
+	}
+	if productType == "claude_account" {
+		cdkSKU = ""
+	}
 	if query != "" {
 		where += ` AND (o.batch_no LIKE ? OR o.buyer LIKE ?)`
 		q := "%" + strings.TrimSpace(query) + "%"
@@ -113,6 +153,14 @@ func (s *Store) ListOrders(ctx context.Context, page, size int, query, plan, sta
 	if plan != "" {
 		where += ` AND o.plan=?`
 		args = append(args, plan)
+	}
+	if productType != "" {
+		where += ` AND o.product_type=?`
+		args = append(args, productType)
+	}
+	if cdkSKU != "" {
+		where += ` AND o.cdk_sku=?`
+		args = append(args, cdkSKU)
 	}
 	if status != "" {
 		where += ` AND o.status=?`
@@ -154,6 +202,22 @@ func (s *Store) OrderAccounts(ctx context.Context, id int64) ([]ClaudeAccount, e
 	}
 	return items, rows.Err()
 }
+func (s *Store) OrderCDKs(ctx context.Context, id int64) ([]ChatGPTCDK, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+qualifiedChatGPTCDKColumns+` FROM order_cdks oc JOIN chatgpt_cdks c ON c.id=oc.cdk_id WHERE oc.order_id=? ORDER BY oc.id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChatGPTCDK{}
+	for rows.Next() {
+		item, e := scanChatGPTCDK(rows)
+		if e != nil {
+			return nil, e
+		}
+		items = append(items, *item)
+	}
+	return items, rows.Err()
+}
 func (s *Store) RecordOrderDownload(ctx context.Context, orderID, adminID int64, ip string) error {
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO order_download_logs(order_id,admin_user_id,client_ip) VALUES(?,?,?)`, orderID, adminID, ip)
 	return err
@@ -176,6 +240,19 @@ func (s *Store) CancelOrder(ctx context.Context, id int64) error {
 	if downloads > 0 {
 		return errors.New("downloaded order cannot be cancelled")
 	}
+	var productType string
+	if err = tx.QueryRowContext(ctx, `SELECT product_type FROM orders WHERE id=?`, id).Scan(&productType); err != nil {
+		return err
+	}
+	if productType == "chatgpt_cdk" {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM order_cdks WHERE order_id=?`, id); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE orders SET status='cancelled',updated_at=CURRENT_TIMESTAMP WHERE id=?`, id); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE claude_accounts SET delivery_status=CASE WHEN plan='max_20x' THEN 'upgraded' ELSE 'available' END,delivered_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT account_id FROM order_accounts WHERE order_id=?)`, id); err != nil {
 		return err
 	}
@@ -189,7 +266,7 @@ func (s *Store) CancelOrder(ctx context.Context, id int64) error {
 }
 
 func (s *Store) ListAPIKeys(ctx context.Context) ([]APIKey, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,name,key_prefix,status,last_used_at,expires_at,created_at FROM api_keys ORDER BY id DESC`)
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,name,key_prefix,status,last_used_at,expires_at,created_at FROM api_keys WHERE deleted_at IS NULL ORDER BY id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -208,12 +285,23 @@ func (s *Store) SetAPIKeyStatus(ctx context.Context, id int64, status int) error
 	if status != 1 && status != -1 {
 		return errors.New("status must be 1 or -1")
 	}
-	r, err := s.DB.ExecContext(ctx, `UPDATE api_keys SET status=? WHERE id=?`, status, id)
+	r, err := s.DB.ExecContext(ctx, `UPDATE api_keys SET status=? WHERE id=? AND deleted_at IS NULL`, status, id)
 	if err != nil {
 		return err
 	}
 	n, _ := r.RowsAffected()
 	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) DeleteAPIKey(ctx context.Context, id int64) error {
+	r, err := s.DB.ExecContext(ctx, `UPDATE api_keys SET status=-1,deleted_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
 	return nil

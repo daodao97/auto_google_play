@@ -41,6 +41,9 @@ type Server struct {
 	registrationScheduleInterval time.Duration
 	registrationSchedulerOnce    sync.Once
 	registrationSchedulerStop    chan struct{}
+	chatGPTRedeemBaseURL         string
+	chatGPTRedeemAPIKey          string
+	chatGPTRedeemHTTPClient      *http.Client
 }
 
 func New(store *dao.Store, cfg conf.Config) *Server {
@@ -54,6 +57,8 @@ func New(store *dao.Store, cfg conf.Config) *Server {
 		slashImportTimeout: 30 * time.Second, slashImportRetryInterval: time.Second, claudeBaseURL: claudeBaseURL,
 		registrationBaseURL: registrationBaseURL, registrationHTTPClient: &http.Client{Timeout: 30 * time.Second}, registrationPollInterval: 3 * time.Second,
 		registrationScheduleInterval: time.Minute, registrationSchedulerStop: make(chan struct{}),
+		chatGPTRedeemBaseURL: strings.TrimRight(strings.TrimSpace(cfg.ChatGPTRedeemURL), "/"),
+		chatGPTRedeemAPIKey:  strings.TrimSpace(cfg.ChatGPTRedeemKey), chatGPTRedeemHTTPClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -84,6 +89,9 @@ func (s *Server) Bootstrap() error {
 
 func (s *Server) Setup(r *gin.Engine) {
 	r.GET("/api/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
+	r.POST("/api/chatgpt/redeem/check", s.checkChatGPTCDK)
+	r.POST("/api/chatgpt/redeem/submit", s.redeemChatGPTCDK)
+	r.POST("/api/chatgpt/redeem/task", s.getPublicChatGPTRedeemTask)
 	r.POST("/api/admin/auth/login", s.login)
 	admin := r.Group("/api/admin")
 	admin.Use(s.adminAuth())
@@ -130,6 +138,12 @@ func (s *Server) Setup(r *gin.Engine) {
 	admin.GET("/api-keys", s.listAPIKeys)
 	admin.POST("/api-keys", s.createAPIKey)
 	admin.PATCH("/api-keys/:id/status", s.apiKeyStatus)
+	admin.DELETE("/api-keys/:id", s.deleteAPIKey)
+	admin.GET("/chatgpt-cdks", s.listChatGPTCDKs)
+	admin.POST("/chatgpt-cdks/generate", s.generateChatGPTCDKs)
+	admin.GET("/chatgpt-cdks/export", s.exportChatGPTCDKs)
+	admin.GET("/chatgpt-tasks", s.listChatGPTTasks)
+	admin.GET("/chatgpt-tasks/:id", s.getChatGPTTask)
 	admins := admin.Group("/admin-users")
 	admins.Use(requireSuperAdmin())
 	admins.GET("", s.listAdmins)
@@ -149,6 +163,9 @@ func (s *Server) Setup(r *gin.Engine) {
 	public.POST("/card/report", s.reportCards)
 	public.POST("/card/verify-code/token", s.setVerifyCodeToken)
 	public.POST("/card/verify-code", s.verifyCode)
+	public.POST("/chatgpt/cdk/check", s.checkChatGPTCDK)
+	public.POST("/chatgpt/cdk/redeem", s.redeemChatGPTCDK)
+	public.GET("/chatgpt/cdk/tasks/:taskId", s.getChatGPTRedeemTask)
 }
 
 func randomToken(bytes int) string {
@@ -201,6 +218,8 @@ func handleStoreError(c *gin.Context, err error) {
 		fail(c, 409, "INSUFFICIENT_MAIL_ACCOUNTS", err)
 	case strings.Contains(err.Error(), "insufficient cards"):
 		fail(c, 409, "INSUFFICIENT_CARDS", err)
+	case strings.Contains(err.Error(), "insufficient chatgpt cdks"):
+		fail(c, 409, "INSUFFICIENT_CHATGPT_CDKS", err)
 	case strings.Contains(err.Error(), "idempotency"):
 		fail(c, 409, "IDEMPOTENCY_CONFLICT", err)
 	case strings.Contains(err.Error(), "lease"):
@@ -617,7 +636,7 @@ func (s *Server) setVerifyCodeToken(c *gin.Context) {
 
 func (s *Server) listOrders(c *gin.Context) {
 	p, z := page(c)
-	items, total, err := s.store.ListOrders(c.Request.Context(), p, z, c.Query("q"), c.Query("plan"), c.Query("status"))
+	items, total, err := s.store.ListOrders(c.Request.Context(), p, z, c.Query("q"), c.Query("productType"), c.Query("plan"), c.Query("cdkSku"), c.Query("status"))
 	if err != nil {
 		handleStoreError(c, err)
 		return
@@ -656,7 +675,12 @@ func (s *Server) getOrder(c *gin.Context) {
 		handleStoreError(c, err)
 		return
 	}
-	ok(c, gin.H{"order": o, "accounts": accounts})
+	cdks, err := s.store.OrderCDKs(c.Request.Context(), id)
+	if err != nil {
+		handleStoreError(c, err)
+		return
+	}
+	ok(c, gin.H{"order": o, "accounts": accounts, "cdks": cdks})
 }
 func (s *Server) downloadOrder(c *gin.Context) {
 	id, err := idParam(c)
@@ -673,14 +697,25 @@ func (s *Server) downloadOrder(c *gin.Context) {
 		fail(c, 400, "NOT_ALLOCATED", errors.New("订单未分配"))
 		return
 	}
-	items, err := s.store.OrderAccounts(c.Request.Context(), id)
-	if err != nil {
-		handleStoreError(c, err)
-		return
-	}
 	var b strings.Builder
-	for _, a := range items {
-		fmt.Fprintf(&b, "%s----%s----%s\n", a.Mail, a.Password, a.SessionKey)
+	if o.ProductType == "chatgpt_cdk" {
+		items, loadErr := s.store.OrderCDKs(c.Request.Context(), id)
+		if loadErr != nil {
+			handleStoreError(c, loadErr)
+			return
+		}
+		for _, item := range items {
+			fmt.Fprintln(&b, item.Code)
+		}
+	} else {
+		items, loadErr := s.store.OrderAccounts(c.Request.Context(), id)
+		if loadErr != nil {
+			handleStoreError(c, loadErr)
+			return
+		}
+		for _, a := range items {
+			fmt.Fprintf(&b, "%s----%s----%s\n", a.Mail, a.Password, a.SessionKey)
+		}
 	}
 	filename := strings.Map(func(r rune) rune {
 		if r == '/' || r == '\\' || r == '\n' || r == '\r' {
@@ -750,6 +785,19 @@ func (s *Server) apiKeyStatus(c *gin.Context) {
 		handleStoreError(c, err)
 		return
 	}
+	ok(c, true)
+}
+func (s *Server) deleteAPIKey(c *gin.Context) {
+	id, err := idParam(c)
+	if err != nil {
+		fail(c, 400, "BAD_ID", err)
+		return
+	}
+	if err = s.store.DeleteAPIKey(c.Request.Context(), id); err != nil {
+		handleStoreError(c, err)
+		return
+	}
+	s.store.Audit(c.Request.Context(), "admin", currentAdmin(c).ID, "delete", "api_key", strconv.FormatInt(id, 10), `{"softDelete":true}`, clientIP(c))
 	ok(c, true)
 }
 
