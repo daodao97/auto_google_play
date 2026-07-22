@@ -16,7 +16,9 @@ import {
 const route = useRoute(),
   router = useRouter(),
   auth = useAuthStore();
-const isStandalone = computed(() => route.path === "/admin/login" || route.path === "/redeem");
+const isStandalone = computed(
+  () => route.path === "/" || route.path === "/admin/login" || route.path === "/redeem",
+);
 const titles: Record<string, string> = {
   "/admin/dashboard": "仪表盘",
   "/admin/accounts": "Claude 账号池",

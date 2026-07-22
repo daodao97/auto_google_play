@@ -17,8 +17,8 @@ import ChatGPTTasksView from '@/views/ChatGPTTasksView.vue'
 
 const router = createRouter({ history: createWebHistory(), routes: [
   { path: '/admin/login', component: LoginView, meta: { public: true } },
+  { path: '/', component: RedeemView, meta: { guestAllowed: true } },
   { path: '/redeem', component: RedeemView, meta: { guestAllowed: true } },
-  { path: '/', redirect: '/admin' },
   { path: '/admin', redirect: '/admin/dashboard' },
   { path: '/admin/dashboard', component: DashboardView },
   { path: '/admin/accounts', component: AccountsView },
