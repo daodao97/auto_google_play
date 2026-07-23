@@ -279,11 +279,11 @@ const endpoints: Endpoint[] = [
   },
   {
     key: "cardReport",
-    title: "上报 Card 不可用",
+    title: "上报 Card 使用结果",
     method: "POST",
     path: "/api/card/report",
     summary:
-      "调用方发现卡片失效、拒付或无法继续使用时，将本次下发中的卡标记为不可用。支持批量并可重复提交；不可用卡不会再次下发。",
+      "上报本次下发中的卡已使用或不可用。已使用卡会增加一次使用次数并进入 5 小时冷却期；不可用卡不会再次下发。支持批量与幂等重试。",
     sideEffect: true,
     headers: [
       {
@@ -303,7 +303,7 @@ const endpoints: Endpoint[] = [
         name: "cards",
         type: "array",
         required: true,
-        description: "需要标记为不可用的卡列表",
+        description: "需要上报使用结果的卡列表",
       },
       {
         name: "cards[].cardPoolId",
@@ -315,18 +315,18 @@ const endpoints: Endpoint[] = [
         name: "cards[].status",
         type: "string",
         required: true,
-        description: "固定为 unavailable",
+        description: "used（已使用）或 unavailable（不可用）",
       },
       {
         name: "cards[].reason",
         type: "string",
         required: false,
-        description: "不可用原因，写入审计日志",
+        description: "可选说明，写入审计日志",
       },
     ],
     request: {
       requestId: "card-request-001",
-      cards: [{ cardPoolId: 12, status: "unavailable", reason: "declined" }],
+      cards: [{ cardPoolId: 12, status: "used" }],
     },
     response: { data: { reported: 1, errors: [] } },
   },
@@ -442,11 +442,11 @@ const endpoints: Endpoint[] = [
   },
   {
     key: "googleReport",
-    title: "上报 Google 账号已使用",
+    title: "上报 Google 账号结果",
     method: "POST",
     path: "/api/google_account/report",
     summary:
-      "将本次下发的 Google 账号永久标记为已使用，并关联已存在的 Claude 账号邮箱。相同关联重复上报是幂等的。",
+      "上报本次下发的 Google 账号结果，不绑定具体业务邮箱。支持已使用、已弃用、无法登录三种结果；成功上报后账号不再下发，相同结果重复上报是幂等的。",
     sideEffect: true,
     headers: [
       {
@@ -469,24 +469,22 @@ const endpoints: Endpoint[] = [
         description: "下发响应中的 googleAccountId",
       },
       {
-        name: "claudeAccountMail",
-        type: "string",
-        required: true,
-        description: "需要关联的已入库 Claude 账号邮箱",
+        name: "status",
+		type: "string",
+		required: true,
+		description: "used、discarded 或 login_failed",
       },
     ],
     request: {
-      requestId: "google-request-001",
-      googleAccountId: 21,
-      claudeAccountMail: "claude@example.com",
+		requestId: "google-request-001",
+		googleAccountId: 21,
+		status: "used",
     },
     response: {
       data: {
         googleAccountId: 21,
         status: "used",
-        claudeAccountId: 10,
-        claudeAccountMail: "claude@example.com",
-        usedAt: "2026-07-19T12:05:00+08:00",
+		reportedAt: "2026-07-19T12:05:00+08:00",
       },
     },
   },

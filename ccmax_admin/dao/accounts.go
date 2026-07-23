@@ -244,7 +244,7 @@ func (s *Store) UpgradeAccount(ctx context.Context, mail, plan string, upgradedA
 	if alreadyReported > 0 {
 		usageIncrement = 0
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE card_pool SET usage_count=usage_count+?,cooldown_until=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, usageIncrement, time.Now().Add(5*time.Hour), cardPoolID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE card_pool SET usage_count=usage_count+?,cooldown_until=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, usageIncrement, time.Now().Add(CardCooldown), cardPoolID); err != nil {
 		return nil, err
 	}
 	a, err := scanAccount(tx.QueryRowContext(ctx, `SELECT `+accountColumns+` FROM claude_accounts WHERE mail=? COLLATE NOCASE`, strings.TrimSpace(mail)))

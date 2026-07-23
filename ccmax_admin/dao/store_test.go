@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -344,6 +345,44 @@ func TestCardDispatchReportIdempotencyAndOwnership(t *testing.T) {
 	}
 	if _, err = s.ReportCardUnavailable(t.Context(), otherKeyID, "other-card-request", reassigned[0].ID); err != nil {
 		t.Fatalf("card unavailable report should be idempotent: %v", err)
+	}
+}
+
+func TestGoogleAccountReportStatusesWithoutClaudeBinding(t *testing.T) {
+	s := testStore(t)
+	_, keyID := seedAdminAndKey(t, s)
+	ctx := t.Context()
+	statuses := []string{"used", "discarded", "login_failed"}
+	for index, status := range statuses {
+		accountID, err := s.CreateGoogleAccount(ctx, fmt.Sprintf("google-report-%d@example.com", index), "password")
+		if err != nil {
+			t.Fatal(err)
+		}
+		requestID := fmt.Sprintf("google-report-%d", index)
+		dispatched, err := s.DispatchGoogleAccount(ctx, keyID, requestID, time.Hour, "127.0.0.1")
+		if err != nil || dispatched.ID != accountID {
+			t.Fatalf("dispatch status %s: %#v %v", status, dispatched, err)
+		}
+		reported, err := s.ReportGoogleAccount(ctx, keyID, requestID, accountID, status)
+		if err != nil || reported.Status != status || reported.ReportedAt == nil {
+			t.Fatalf("report status %s: %#v %v", status, reported, err)
+		}
+		retry, err := s.ReportGoogleAccount(ctx, keyID, requestID, accountID, status)
+		if err != nil || retry.Status != status {
+			t.Fatalf("idempotent report status %s: %#v %v", status, retry, err)
+		}
+		var linkedClaudeID sql.NullInt64
+		if err = s.DB.QueryRowContext(ctx, `SELECT claude_account_id FROM google_accounts WHERE id=?`, accountID).Scan(&linkedClaudeID); err != nil || linkedClaudeID.Valid {
+			t.Fatalf("status %s unexpectedly bound a Claude account: %#v %v", status, linkedClaudeID, err)
+		}
+		listed, total, err := s.ListGoogleAccounts(ctx, 1, 10, "", status, 0)
+		if err != nil || total != 1 || len(listed) != 1 || listed[0].ID != accountID {
+			t.Fatalf("list status %s: %#v total=%d err=%v", status, listed, total, err)
+		}
+	}
+	stats, err := s.GoogleAccountStats(ctx)
+	if err != nil || stats["used"] != 1 || stats["discarded"] != 1 || stats["login_failed"] != 1 || stats["total"] != 3 {
+		t.Fatalf("unexpected Google report stats: %#v %v", stats, err)
 	}
 }
 

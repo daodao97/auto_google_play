@@ -193,17 +193,17 @@ Content-Type: application/json
 {"requestId":"unique-google-request-id"}
 ```
 
-下发期间账号会被临时锁定，租约时长与 Claude Free 账号一致。处理成功后上报已使用状态并关联 Claude 账号：
+下发期间账号会被临时锁定，租约时长与账号下发租约配置一致。处理结束后上报结果状态：
 
 ```http
 POST /api/google_account/report
 X-API-Key: ccm_xxx
 Content-Type: application/json
 
-{"requestId":"unique-google-request-id","googleAccountId":21,"claudeAccountMail":"claude@example.com"}
+{"requestId":"unique-google-request-id","googleAccountId":21,"status":"used"}
 ```
 
-上报成功后 Google 账号永久变为 `used`，不会再次下发。关联的 Claude 账号必须已存在；相同 Google 账号与 Claude 账号的重复上报为幂等成功。
+`status` 支持 `used`（已使用）、`discarded`（已弃用）、`login_failed`（账号无法登录）。任一结果上报成功后，该 Google 账号都不会再次下发；同一结果重复上报为幂等成功。Google 账号上报不再绑定 Claude 邮箱，可用于 Claude、ChatGPT 等不同业务。
 
 ### 邮箱账号池
 
@@ -268,17 +268,17 @@ Content-Type: application/json
 
 响应中的 `cardPoolId` 用于升级关联、验证码查询和状态上报。启用且不在升级冷却期的卡会按使用次数均衡下发。
 
-发现卡片不可用时上报：
+卡片已使用或不可用时上报：
 
 ```http
 POST /api/card/report
 X-API-Key: ccm_xxx
 Content-Type: application/json
 
-{"requestId":"unique-card-request-id","cards":[{"cardPoolId":12,"status":"unavailable","reason":"declined"}]}
+{"requestId":"unique-card-request-id","cards":[{"cardPoolId":12,"status":"used"}]}
 ```
 
-上报成功后 Card 状态变为不可用，不会再次下发；管理员可以在 Card Pool 中重新启用。
+`status=used` 会增加一次使用次数并让 Card 进入 5 小时冷却期；`status=unavailable` 会将 Card 标记为不可用，管理员可在 Card Pool 中重新启用。`reason` 为可选审计说明。同一次下发的相同结果可安全重复提交。
 
 ```http
 POST /api/card/verify-code

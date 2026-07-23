@@ -156,7 +156,7 @@ func (s *Server) Setup(r *gin.Engine) {
 	public.POST("/claude_account/release", s.releaseDispatchedAccounts)
 	public.POST("/claude_account/upgrade", s.upgradeAccount)
 	public.POST("/google_account", s.dispatchGoogleAccount)
-	public.POST("/google_account/report", s.reportGoogleAccountUsed)
+	public.POST("/google_account/report", s.reportGoogleAccount)
 	public.POST("/mail_account", s.dispatchMailAccount)
 	public.POST("/mail_account/report", s.reportMailAccountUsed)
 	public.POST("/card", s.dispatchCards)
@@ -1100,17 +1100,18 @@ func (s *Server) reportCards(c *gin.Context) {
 	reported := 0
 	errorsByItem := make([]gin.H, 0)
 	for _, item := range req.Cards {
-		if strings.ToLower(strings.TrimSpace(item.Status)) != "unavailable" {
-			errorsByItem = append(errorsByItem, gin.H{"cardPoolId": item.CardPoolID, "message": "status must be unavailable"})
+		item.Status = strings.ToLower(strings.TrimSpace(item.Status))
+		if item.Status != "used" && item.Status != "unavailable" {
+			errorsByItem = append(errorsByItem, gin.H{"cardPoolId": item.CardPoolID, "message": "status must be used or unavailable"})
 			continue
 		}
-		card, err := s.store.ReportCardUnavailable(c.Request.Context(), key.ID, req.RequestID, item.CardPoolID)
+		card, err := s.store.ReportCard(c.Request.Context(), key.ID, req.RequestID, item.CardPoolID, item.Status, item.Reason)
 		if err != nil {
 			errorsByItem = append(errorsByItem, gin.H{"cardPoolId": item.CardPoolID, "message": err.Error()})
 			continue
 		}
 		reported++
-		s.store.Audit(c.Request.Context(), "api_key", key.ID, "report_card_unavailable", "card_pool", strconv.FormatInt(card.ID, 10), fmt.Sprintf(`{"requestId":%q,"reason":%q}`, req.RequestID, strings.TrimSpace(item.Reason)), clientIP(c))
+		s.store.Audit(c.Request.Context(), "api_key", key.ID, "report_card_"+item.Status, "card_pool", strconv.FormatInt(card.ID, 10), fmt.Sprintf(`{"requestId":%q,"reason":%q}`, req.RequestID, strings.TrimSpace(item.Reason)), clientIP(c))
 	}
 	status := http.StatusOK
 	if reported == 0 && len(errorsByItem) > 0 {

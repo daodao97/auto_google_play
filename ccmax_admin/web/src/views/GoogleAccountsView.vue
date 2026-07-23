@@ -7,14 +7,12 @@ interface GoogleAccount {
   id: number;
   mail: string;
   password: string;
-  status: "unused" | "used";
+  status: "unused" | "used" | "discarded" | "login_failed";
   enabled: 1 | -1;
   dispatchCount: number;
   lastDispatchedAt?: string;
   lockedUntil?: string;
-  claudeAccountId?: number;
-  claudeAccountMail?: string;
-  usedAt?: string;
+  reportedAt?: string;
   createdAt: string;
 }
 
@@ -27,10 +25,30 @@ const showSecrets = ref(false);
 const importText = ref("");
 const filters = reactive({ q: "", status: "", enabled: "" });
 const pager = reactive({ page: 1, size: 20 });
-const stats = reactive({ unused: 0, locked: 0, used: 0, total: 0 });
+const stats = reactive({
+  unused: 0,
+  locked: 0,
+  used: 0,
+  discarded: 0,
+  login_failed: 0,
+  total: 0,
+});
 
 function dateTime(value?: string) {
   return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—";
+}
+
+function statusLabel(item: GoogleAccount) {
+  if (item.status === "used") return "已使用";
+  if (item.status === "discarded") return "已弃用";
+  if (item.status === "login_failed") return "无法登录";
+  return item.lockedUntil ? "下发锁定中" : "未使用";
+}
+
+function statusType(item: GoogleAccount) {
+  if (item.status === "discarded" || item.status === "login_failed") return "danger";
+  if (item.status === "used") return "info";
+  return item.lockedUntil ? "warning" : "success";
 }
 
 async function load() {
@@ -133,6 +151,14 @@ onMounted(load);
       <div class="metric-value">{{ stats.used }}</div>
     </div>
     <div class="metric">
+      <div class="metric-label">已弃用</div>
+      <div class="metric-value">{{ stats.discarded }}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">无法登录</div>
+      <div class="metric-value">{{ stats.login_failed }}</div>
+    </div>
+    <div class="metric">
       <div class="metric-label">总账号</div>
       <div class="metric-value">{{ stats.total }}</div>
     </div>
@@ -156,6 +182,8 @@ onMounted(load);
         >
           <el-option label="未使用" value="unused" />
           <el-option label="已使用" value="used" />
+          <el-option label="已弃用" value="discarded" />
+          <el-option label="无法登录" value="login_failed" />
         </el-select>
         <el-select
           v-model="filters.enabled"
@@ -188,23 +216,7 @@ onMounted(load);
       </el-table-column>
       <el-table-column label="状态" width="120">
         <template #default="{ row }">
-          <el-tag
-            :type="
-              row.status === 'used'
-                ? 'info'
-                : row.lockedUntil
-                  ? 'warning'
-                  : 'success'
-            "
-          >
-            {{
-              row.status === "used"
-                ? "已使用"
-                : row.lockedUntil
-                  ? "下发锁定中"
-                  : "未使用"
-            }}
-          </el-tag>
+          <el-tag :type="statusType(row)">{{ statusLabel(row) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="启用状态" width="100">
@@ -218,13 +230,8 @@ onMounted(load);
       <el-table-column label="租约到期" width="175">
         <template #default="{ row }">{{ dateTime(row.lockedUntil) }}</template>
       </el-table-column>
-      <el-table-column label="关联 Claude 账号" min-width="230">
-        <template #default="{ row }">
-          {{ row.claudeAccountMail || "—" }}
-        </template>
-      </el-table-column>
-      <el-table-column label="使用时间" width="175">
-        <template #default="{ row }">{{ dateTime(row.usedAt) }}</template>
+      <el-table-column label="上报时间" width="175">
+        <template #default="{ row }">{{ dateTime(row.reportedAt) }}</template>
       </el-table-column>
       <el-table-column label="创建时间" width="175">
         <template #default="{ row }">{{ dateTime(row.createdAt) }}</template>

@@ -150,10 +150,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.migrateCardCooldown(ctx); err != nil {
 		return err
 	}
+	if err := s.migrateCardReports(ctx); err != nil {
+		return err
+	}
 	if err := s.migrateAccountHealth(ctx); err != nil {
 		return err
 	}
 	if err := s.migrateGoogleAccounts(ctx); err != nil {
+		return err
+	}
+	if err := s.migrateGoogleAccountReports(ctx); err != nil {
 		return err
 	}
 	if err := s.migrateMailAccounts(ctx); err != nil {
@@ -439,6 +445,31 @@ func (s *Store) migrateCardCooldown(ctx context.Context) error {
 	return nil
 }
 
+func (s *Store) migrateCardReports(ctx context.Context) error {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"report_status", `TEXT NOT NULL DEFAULT '' CHECK(report_status IN ('','used','unavailable'))`},
+		{"report_reason", `TEXT NOT NULL DEFAULT ''`},
+		{"reported_at", `DATETIME`},
+	}
+	for _, column := range columns {
+		exists, err := s.columnExists(ctx, "card_dispatches", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err = s.DB.ExecContext(ctx, `ALTER TABLE card_dispatches ADD COLUMN `+column.name+` `+column.definition); err != nil {
+			return fmt.Errorf("add card_dispatches.%s: %w", column.name, err)
+		}
+	}
+	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES(16)`)
+	return err
+}
+
 func (s *Store) migrateAccountHealth(ctx context.Context) error {
 	columns := []struct{ name, definition string }{
 		{"alive_status", `TEXT NOT NULL DEFAULT 'unchecked'`},
@@ -506,6 +537,26 @@ func (s *Store) migrateGoogleAccounts(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Store) migrateGoogleAccountReports(ctx context.Context) error {
+	exists, err := s.columnExists(ctx, "google_accounts", "report_status")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err = s.DB.ExecContext(ctx, `ALTER TABLE google_accounts ADD COLUMN report_status TEXT NOT NULL DEFAULT '' CHECK(report_status IN ('','used','discarded','login_failed'))`); err != nil {
+			return fmt.Errorf("add google_accounts.report_status: %w", err)
+		}
+	}
+	if _, err = s.DB.ExecContext(ctx, `UPDATE google_accounts SET report_status='used' WHERE status='used' AND report_status=''`); err != nil {
+		return fmt.Errorf("backfill google account report status: %w", err)
+	}
+	if _, err = s.DB.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_google_account_report_status ON google_accounts(report_status)`); err != nil {
+		return err
+	}
+	_, err = s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES(17)`)
+	return err
 }
 
 func (s *Store) migrateMailAccounts(ctx context.Context) error {

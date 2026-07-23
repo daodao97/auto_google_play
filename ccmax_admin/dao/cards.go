@@ -11,6 +11,8 @@ import (
 
 var digits = regexp.MustCompile(`^\d+$`)
 
+const CardCooldown = 5 * time.Hour
+
 type Card struct {
 	ID               int64      `json:"id"`
 	Source           string     `json:"source"`
@@ -227,20 +229,60 @@ func (s *Store) DispatchCards(ctx context.Context, apiKeyID int64, requestID, so
 	return items, nil
 }
 
-func (s *Store) ReportCardUnavailable(ctx context.Context, apiKeyID int64, requestID string, cardPoolID int64) (*Card, error) {
+func (s *Store) ReportCard(ctx context.Context, apiKeyID int64, requestID string, cardPoolID int64, status, reason string) (*Card, error) {
 	requestID = strings.TrimSpace(requestID)
+	status = strings.ToLower(strings.TrimSpace(status))
+	reason = strings.TrimSpace(reason)
 	if requestID == "" || cardPoolID <= 0 {
 		return nil, errors.New("requestId and positive cardPoolId are required")
 	}
-	var exists int
-	err := s.DB.QueryRowContext(ctx, `SELECT 1 FROM card_dispatches WHERE api_key_id=? AND request_id=? AND card_pool_id=?`, apiKeyID, requestID, cardPoolID).Scan(&exists)
+	if status != "used" && status != "unavailable" {
+		return nil, errors.New("status must be used or unavailable")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	if _, err = s.DB.ExecContext(ctx, `UPDATE card_pool SET status=-1,updated_at=CURRENT_TIMESTAMP WHERE id=?`, cardPoolID); err != nil {
+	defer tx.Rollback()
+	var reportedStatus string
+	if err = tx.QueryRowContext(ctx, `SELECT report_status FROM card_dispatches WHERE api_key_id=? AND request_id=? AND card_pool_id=?`, apiKeyID, requestID, cardPoolID).Scan(&reportedStatus); err != nil {
 		return nil, err
 	}
-	return scanCard(s.DB.QueryRowContext(ctx, `SELECT `+cardColumns+` FROM card_pool WHERE id=?`, cardPoolID))
+	if reportedStatus != "" && reportedStatus != status {
+		return nil, fmt.Errorf("card was already reported as %s", reportedStatus)
+	}
+	if reportedStatus == "" {
+		result, updateErr := tx.ExecContext(ctx, `UPDATE card_dispatches SET report_status=?,report_reason=?,reported_at=CURRENT_TIMESTAMP WHERE api_key_id=? AND request_id=? AND card_pool_id=? AND report_status=''`, status, reason, apiKeyID, requestID, cardPoolID)
+		if updateErr != nil {
+			return nil, updateErr
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return nil, errors.New("card report conflict; please retry")
+		}
+		switch status {
+		case "used":
+			cooldownUntil := time.Now().Add(CardCooldown)
+			if _, err = tx.ExecContext(ctx, `UPDATE card_pool SET usage_count=usage_count+1,cooldown_until=CASE WHEN cooldown_until IS NULL OR cooldown_until<? THEN ? ELSE cooldown_until END,updated_at=CURRENT_TIMESTAMP WHERE id=?`, cooldownUntil, cooldownUntil, cardPoolID); err != nil {
+				return nil, err
+			}
+		case "unavailable":
+			if _, err = tx.ExecContext(ctx, `UPDATE card_pool SET status=-1,updated_at=CURRENT_TIMESTAMP WHERE id=?`, cardPoolID); err != nil {
+				return nil, err
+			}
+		}
+	}
+	card, err := scanCard(tx.QueryRowContext(ctx, `SELECT `+cardColumns+` FROM card_pool WHERE id=?`, cardPoolID))
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return card, nil
+}
+
+func (s *Store) ReportCardUnavailable(ctx context.Context, apiKeyID int64, requestID string, cardPoolID int64) (*Card, error) {
+	return s.ReportCard(ctx, apiKeyID, requestID, cardPoolID, "unavailable", "")
 }
 func (s *Store) Credential(ctx context.Context, source string) (string, error) {
 	var token string

@@ -124,31 +124,29 @@ func (s *Server) dispatchGoogleAccount(c *gin.Context) {
 	})
 }
 
-func (s *Server) reportGoogleAccountUsed(c *gin.Context) {
+func (s *Server) reportGoogleAccount(c *gin.Context) {
 	var req struct {
-		RequestID         string `json:"requestId"`
-		GoogleAccountID   int64  `json:"googleAccountId"`
-		ClaudeAccountMail string `json:"claudeAccountMail"`
+		RequestID       string `json:"requestId"`
+		GoogleAccountID int64  `json:"googleAccountId"`
+		Status          string `json:"status"`
 	}
 	if !bind(c, &req) {
 		return
 	}
-	if strings.TrimSpace(req.RequestID) == "" || req.GoogleAccountID <= 0 || strings.TrimSpace(req.ClaudeAccountMail) == "" {
-		fail(c, http.StatusBadRequest, "BAD_REQUEST", errors.New("requestId, positive googleAccountId and claudeAccountMail are required"))
+	if strings.TrimSpace(req.RequestID) == "" || req.GoogleAccountID <= 0 || strings.TrimSpace(req.Status) == "" {
+		fail(c, http.StatusBadRequest, "BAD_REQUEST", errors.New("requestId, positive googleAccountId and status are required"))
 		return
 	}
 	key := currentAPIKey(c)
-	item, err := s.store.UseGoogleAccount(c.Request.Context(), key.ID, req.RequestID, req.GoogleAccountID, req.ClaudeAccountMail)
+	item, err := s.store.ReportGoogleAccount(c.Request.Context(), key.ID, req.RequestID, req.GoogleAccountID, req.Status)
 	if err != nil {
 		handleStoreError(c, err)
 		return
 	}
-	s.store.Audit(c.Request.Context(), "api_key", key.ID, "mark_used", "google_account", strconv.FormatInt(item.ID, 10), fmt.Sprintf(`{"requestId":%q,"claudeAccountId":%d}`, req.RequestID, *item.ClaudeAccountID), clientIP(c))
+	s.store.Audit(c.Request.Context(), "api_key", key.ID, "report_"+item.Status, "google_account", strconv.FormatInt(item.ID, 10), fmt.Sprintf(`{"requestId":%q,"status":%q}`, req.RequestID, item.Status), clientIP(c))
 	ok(c, gin.H{
-		"googleAccountId":   item.ID,
-		"status":            item.Status,
-		"claudeAccountId":   item.ClaudeAccountID,
-		"claudeAccountMail": item.ClaudeAccountMail,
-		"usedAt":            item.UsedAt,
+		"googleAccountId": item.ID,
+		"status":          item.Status,
+		"reportedAt":      item.ReportedAt,
 	})
 }

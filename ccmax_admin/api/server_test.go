@@ -204,7 +204,11 @@ func TestAPIDispatchesCardAndProtectsVerificationByAPIKey(t *testing.T) {
 	router := gin.New()
 	server.Setup(router)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/card", strings.NewReader(`{"count":1,"source":"qbit"}`))
+	secondCardPoolID, err := store.CreateCard(t.Context(), dao.Card{Source: "qbit", CardID: "channel-card-2", CardNo: "4111111111111112", ExpireMMYY: "1228", CCV: "124"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/card", strings.NewReader(`{"count":2,"source":"qbit"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", ownerToken)
 	req.Header.Set("Idempotency-Key", "card-api-request")
@@ -218,11 +222,23 @@ func TestAPIDispatchesCardAndProtectsVerificationByAPIKey(t *testing.T) {
 	if forbidden.Code != http.StatusNotFound {
 		t.Fatalf("other API key should not verify card: status=%d body=%s", forbidden.Code, forbidden.Body.String())
 	}
-	report := requestWithAPIKey(t, router, http.MethodPost, "/api/card/report", ownerToken, fmt.Sprintf(`{"requestId":"card-api-request","cards":[{"cardPoolId":%d,"status":"unavailable","reason":"declined"}]}`, cardPoolID))
+	usedReportBody := fmt.Sprintf(`{"requestId":"card-api-request","cards":[{"cardPoolId":%d,"status":"used"}]}`, cardPoolID)
+	usedReport := requestWithAPIKey(t, router, http.MethodPost, "/api/card/report", ownerToken, usedReportBody)
+	if usedReport.Code != http.StatusOK || !strings.Contains(usedReport.Body.String(), `"reported":1`) {
+		t.Fatalf("card used report: status=%d body=%s", usedReport.Code, usedReport.Body.String())
+	}
+	if retry := requestWithAPIKey(t, router, http.MethodPost, "/api/card/report", ownerToken, usedReportBody); retry.Code != http.StatusOK {
+		t.Fatalf("card used report retry: status=%d body=%s", retry.Code, retry.Body.String())
+	}
+	cooled, err := store.CardByID(t.Context(), cardPoolID)
+	if err != nil || cooled.UsageCount != 1 || cooled.CooldownUntil == nil || cooled.CooldownUntil.Before(time.Now().Add(4*time.Hour+59*time.Minute)) {
+		t.Fatalf("used card did not enter cooldown exactly once: %#v %v", cooled, err)
+	}
+	report := requestWithAPIKey(t, router, http.MethodPost, "/api/card/report", ownerToken, fmt.Sprintf(`{"requestId":"card-api-request","cards":[{"cardPoolId":%d,"status":"unavailable","reason":"declined"}]}`, secondCardPoolID))
 	if report.Code != http.StatusOK || !strings.Contains(report.Body.String(), `"reported":1`) {
 		t.Fatalf("card unavailable report: status=%d body=%s", report.Code, report.Body.String())
 	}
-	ownerVerify := requestWithAPIKey(t, router, http.MethodPost, "/api/card/verify-code", ownerToken, fmt.Sprintf(`{"cardPoolId":%d,"googleRef":"BMR"}`, cardPoolID))
+	ownerVerify := requestWithAPIKey(t, router, http.MethodPost, "/api/card/verify-code", ownerToken, fmt.Sprintf(`{"cardPoolId":%d,"googleRef":"BMR"}`, secondCardPoolID))
 	if ownerVerify.Code != http.StatusNotFound {
 		t.Fatalf("unavailable card should not be verified: status=%d body=%s", ownerVerify.Code, ownerVerify.Body.String())
 	}

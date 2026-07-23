@@ -296,9 +296,6 @@ func TestGoogleAccountPoolDispatchAndUsedReport(t *testing.T) {
 	if keyID <= 0 {
 		t.Fatal("API key was not created")
 	}
-	claude := adminRequest(t, env, http.MethodPost, "/api/admin/claude-accounts", `{"mail":"linked-claude@example.com","password":"pw","sessionKey":"linked-session","plan":"free","status":1}`)
-	requireStatus(t, claude, http.StatusOK)
-
 	imported := adminRequest(t, env, http.MethodPost, "/api/admin/google-accounts/import", `{"lines":"first-google@example.com|FirstPass123!\nsecond-google@example.com|SecondPass123!\ninvalid"}`)
 	requireStatus(t, imported, http.StatusOK)
 	if !strings.Contains(imported.Body.String(), `"created":2`) || !strings.Contains(imported.Body.String(), `第 3 行`) {
@@ -322,10 +319,10 @@ func TestGoogleAccountPoolDispatchAndUsedReport(t *testing.T) {
 		t.Fatalf("idempotent dispatch returned another Google account: %s", retry.Body.String())
 	}
 
-	reportBody := fmt.Sprintf(`{"requestId":"google-request-1","googleAccountId":%d,"claudeAccountMail":"linked-claude@example.com"}`, firstID)
+	reportBody := fmt.Sprintf(`{"requestId":"google-request-1","googleAccountId":%d,"status":"used"}`, firstID)
 	reported := requestWithAPIKey(t, env.router, http.MethodPost, "/api/google_account/report", apiToken, reportBody)
 	requireStatus(t, reported, http.StatusOK)
-	if !strings.Contains(reported.Body.String(), `"status":"used"`) || !strings.Contains(reported.Body.String(), `"claudeAccountMail":"linked-claude@example.com"`) {
+	if !strings.Contains(reported.Body.String(), `"status":"used"`) || !strings.Contains(reported.Body.String(), `"reportedAt":`) || strings.Contains(reported.Body.String(), "claudeAccount") {
 		t.Fatalf("unexpected Google account report response: %s", reported.Body.String())
 	}
 	requireStatus(t, requestWithAPIKey(t, env.router, http.MethodPost, "/api/google_account/report", apiToken, reportBody), http.StatusOK)
@@ -342,8 +339,8 @@ func TestGoogleAccountPoolDispatchAndUsedReport(t *testing.T) {
 
 	listed := adminRequest(t, env, http.MethodGet, "/api/admin/google-accounts?status=used", "")
 	requireStatus(t, listed, http.StatusOK)
-	if !strings.Contains(listed.Body.String(), `"claudeAccountMail":"linked-claude@example.com"`) || !strings.Contains(listed.Body.String(), `"used":1`) {
-		t.Fatalf("Google account association was not listed: %s", listed.Body.String())
+	if !strings.Contains(listed.Body.String(), `"status":"used"`) || !strings.Contains(listed.Body.String(), `"used":1`) || strings.Contains(listed.Body.String(), "claudeAccount") {
+		t.Fatalf("Google account report status was not listed: %s", listed.Body.String())
 	}
 	requireStatus(t, adminRequest(t, env, http.MethodDelete, fmt.Sprintf("/api/admin/google-accounts/%d", secondID), ""), http.StatusOK)
 	remaining := adminRequest(t, env, http.MethodGet, "/api/admin/google-accounts", "")
@@ -855,5 +852,6 @@ func TestAPIValidationAndErrorContracts(t *testing.T) {
 	requireErrorCode(t, requestWithAPIKey(t, env.router, http.MethodPost, "/api/claude_account/upgrade", apiToken, `{"mail":"duplicate@example.com","plan":"max_20x"}`), http.StatusBadRequest, "BAD_REQUEST")
 	requireErrorCode(t, requestWithAPIKey(t, env.router, http.MethodPost, "/api/card", apiToken, `{"count":101}`), http.StatusBadRequest, "INVALID_COUNT")
 	requireErrorCode(t, requestWithAPIKey(t, env.router, http.MethodPost, "/api/card/report", apiToken, `{"requestId":"","cards":[]}`), http.StatusBadRequest, "BAD_REQUEST")
+	requireErrorCode(t, requestWithAPIKey(t, env.router, http.MethodPost, "/api/google_account/report", apiToken, `{"requestId":"request","googleAccountId":1,"status":"unknown"}`), http.StatusBadRequest, "OPERATION_FAILED")
 	requireErrorCode(t, requestWithAPIKey(t, env.router, http.MethodPost, "/api/card/verify-code", apiToken, `{"cardPoolId":0,"googleRef":""}`), http.StatusBadRequest, "BAD_REQUEST")
 }
