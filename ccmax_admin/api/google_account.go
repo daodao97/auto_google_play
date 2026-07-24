@@ -107,7 +107,7 @@ func (s *Server) dispatchGoogleAccount(c *gin.Context) {
 		requestID = "google_" + randomToken(16)
 	}
 	key := currentAPIKey(c)
-	item, err := s.store.DispatchGoogleAccount(c.Request.Context(), key.ID, requestID, s.cfg.DispatchLease, clientIP(c))
+	item, err := s.store.DispatchGoogleAccount(c.Request.Context(), key.ID, requestID, s.cfg.GoogleDispatchLease, clientIP(c))
 	if err != nil {
 		handleStoreError(c, err)
 		return

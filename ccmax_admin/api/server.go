@@ -48,6 +48,15 @@ type Server struct {
 }
 
 func New(store *dao.Store, cfg conf.Config) *Server {
+	if cfg.DispatchLease <= 0 {
+		cfg.DispatchLease = 30 * time.Minute
+	}
+	if cfg.GoogleDispatchLease <= 0 {
+		cfg.GoogleDispatchLease = 3 * time.Minute
+	}
+	if cfg.CardDispatchLease <= 0 {
+		cfg.CardDispatchLease = 3 * time.Minute
+	}
 	registrationBaseURL := strings.TrimSpace(cfg.ClaudeRegisterURL)
 	if registrationBaseURL == "" {
 		registrationBaseURL = "http://claude-register:8000"
@@ -1082,11 +1091,11 @@ func (s *Server) dispatchCards(c *gin.Context) {
 		cards = append(cards, gin.H{"cardPoolId": item.ID, "source": item.Source, "cardId": item.CardID, "cardNo": item.CardNo, "expireMmyy": item.ExpireMMYY, "ccv": item.CCV})
 	}
 	s.store.Audit(c.Request.Context(), "api_key", key.ID, "dispatch_cards", "card_pool", "", fmt.Sprintf(`{"requestId":%q,"count":%d}`, requestID, len(cards)), clientIP(c))
-	ok(c, gin.H{"requestId": requestID, "count": len(cards), "cards": cards})
+	ok(c, gin.H{"requestId": requestID, "leaseExpiresAt": items[0].LockedUntil, "count": len(cards), "cards": cards})
 }
 
 func (s *Server) dispatchCardsWithAutoCreate(ctx context.Context, apiKeyID int64, requestID, source string, count int, ip string) ([]dao.Card, error) {
-	items, err := s.store.DispatchCards(ctx, apiKeyID, requestID, source, count, ip)
+	items, err := s.store.DispatchCards(ctx, apiKeyID, requestID, source, count, s.cfg.CardDispatchLease, ip)
 	if err == nil || count != 1 || !isInsufficientCardsError(err) {
 		return items, err
 	}
@@ -1094,7 +1103,7 @@ func (s *Server) dispatchCardsWithAutoCreate(ctx context.Context, apiKeyID int64
 	s.cardAutoCreateMu.Lock()
 	defer s.cardAutoCreateMu.Unlock()
 
-	items, err = s.store.DispatchCards(ctx, apiKeyID, requestID, source, count, ip)
+	items, err = s.store.DispatchCards(ctx, apiKeyID, requestID, source, count, s.cfg.CardDispatchLease, ip)
 	if err == nil || !isInsufficientCardsError(err) {
 		return items, err
 	}
@@ -1102,7 +1111,7 @@ func (s *Server) dispatchCardsWithAutoCreate(ctx context.Context, apiKeyID int64
 	if createErr := s.createSlashCardForDispatch(ctx, source); createErr != nil {
 		return nil, insufficientErr
 	}
-	items, err = s.store.DispatchCards(ctx, apiKeyID, requestID, source, count, ip)
+	items, err = s.store.DispatchCards(ctx, apiKeyID, requestID, source, count, s.cfg.CardDispatchLease, ip)
 	if isInsufficientCardsError(err) {
 		return nil, insufficientErr
 	}

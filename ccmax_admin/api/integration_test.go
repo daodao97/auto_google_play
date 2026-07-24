@@ -33,7 +33,11 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	cfg := conf.Config{BootstrapUser: "root", BootstrapPass: "RootPass123", SessionTTL: time.Hour, DispatchLease: 30 * time.Minute, MaxDispatchCount: 100}
+	cfg := conf.Config{
+		BootstrapUser: "root", BootstrapPass: "RootPass123", SessionTTL: time.Hour,
+		DispatchLease: 30 * time.Minute, GoogleDispatchLease: 3 * time.Minute,
+		CardDispatchLease: 3 * time.Minute, MaxDispatchCount: 100,
+	}
 	server := New(store, cfg)
 	if err = server.Bootstrap(); err != nil {
 		t.Fatal(err)
@@ -80,6 +84,22 @@ func numericID(t *testing.T, data map[string]any, key string) int64 {
 		t.Fatalf("missing positive %s in %#v", key, data)
 	}
 	return int64(value)
+}
+
+func requireLeaseDuration(t *testing.T, data map[string]any, key string, duration time.Duration) {
+	t.Helper()
+	raw, ok := data[key].(string)
+	if !ok {
+		t.Fatalf("missing %s in %#v", key, data)
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("parse %s=%q: %v", key, raw, err)
+	}
+	remaining := time.Until(expiresAt)
+	if remaining < duration-5*time.Second || remaining > duration+5*time.Second {
+		t.Fatalf("%s duration=%s want approximately %s", key, remaining, duration)
+	}
 }
 
 func seedCoolingAndDisabledCards(t *testing.T, store *dao.Store, source string) {
@@ -224,7 +244,7 @@ func TestAdminAndBusinessAPIsEndToEnd(t *testing.T) {
 	}
 	cardList := adminRequest(t, env, http.MethodGet, "/api/admin/cards", "")
 	requireStatus(t, cardList, http.StatusOK)
-	if !strings.Contains(cardList.Body.String(), `"stats":{"available":3,"cooling":1,"total":4}`) {
+	if !strings.Contains(cardList.Body.String(), `"stats":{"available":3,"cooling":1,"locked":0,"total":4}`) {
 		t.Fatalf("card list response missing inventory stats: %s", cardList.Body.String())
 	}
 
@@ -236,6 +256,7 @@ func TestAdminAndBusinessAPIsEndToEnd(t *testing.T) {
 	env.router.ServeHTTP(cardDispatch, cardDispatchReq)
 	requireStatus(t, cardDispatch, http.StatusOK)
 	cardDispatchData := responseData(t, cardDispatch)
+	requireLeaseDuration(t, cardDispatchData, "leaseExpiresAt", 3*time.Minute)
 	cards := cardDispatchData["cards"].([]any)
 	dispatchedCardID := int64(cards[0].(map[string]any)["cardPoolId"].(float64))
 	if dispatchedCardID == cardID {
@@ -323,6 +344,7 @@ func TestGoogleAccountPoolDispatchAndUsedReport(t *testing.T) {
 	first := requestWithAPIKey(t, env.router, http.MethodPost, "/api/google_account", apiToken, `{"requestId":"google-request-1"}`)
 	requireStatus(t, first, http.StatusOK)
 	firstData := responseData(t, first)
+	requireLeaseDuration(t, firstData, "leaseExpiresAt", 3*time.Minute)
 	firstAccount, ok := firstData["account"].(map[string]any)
 	if !ok {
 		t.Fatalf("missing dispatched Google account: %#v", firstData)
@@ -630,7 +652,7 @@ func TestQbitVerificationAPIWithMockUpstream(t *testing.T) {
 	if err = env.store.SetCredential(t.Context(), "qbit", "mock-token"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = env.store.DispatchCards(t.Context(), keyID, "qbit-request", "qbit", 1, "127.0.0.1"); err != nil {
+	if _, err = env.store.DispatchCards(t.Context(), keyID, "qbit-request", "qbit", 1, 3*time.Minute, "127.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -883,7 +905,7 @@ func TestSlashVerificationAPIWithMockUpstream(t *testing.T) {
 	if err = env.store.SetCredential(t.Context(), "slash", "slash-api-key"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = env.store.DispatchCards(t.Context(), keyID, "slash-request", "slash", 1, "127.0.0.1"); err != nil {
+	if _, err = env.store.DispatchCards(t.Context(), keyID, "slash-request", "slash", 1, 3*time.Minute, "127.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
 

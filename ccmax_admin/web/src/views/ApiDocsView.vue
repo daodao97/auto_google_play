@@ -232,7 +232,7 @@ const endpoints: Endpoint[] = [
     method: "POST",
     path: "/api/card",
     summary:
-      "从 Card Pool 下发一张或多张启用且不在冷却期的卡。请求一张卡且库存不足时，系统会尝试通过 Slash 创建新卡、写入 Card Pool 并直接返回；创建失败后返回 409 INSUFFICIENT_CARDS。下发本身不增加使用次数，使用结果上报后对应卡冷却 5 小时。",
+      "从 Card Pool 下发一张或多张启用、未锁定且不在冷却期的卡。每张卡下发后锁定 3 分钟；未上报时租约到期自动释放，上报后解除租约并执行冷却或禁用。请求一张卡且库存不足时，系统会尝试通过 Slash 创建新卡并直接返回。",
     sideEffect: true,
     headers: [
       {
@@ -265,6 +265,7 @@ const endpoints: Endpoint[] = [
     response: {
       data: {
         requestId: "card-request-001",
+        leaseExpiresAt: "2026-07-24T12:03:00+08:00",
         count: 1,
         cards: [
           {
@@ -407,7 +408,7 @@ const endpoints: Endpoint[] = [
     method: "POST",
     path: "/api/google_account",
     summary:
-      "下发一个未使用的 Google 账号并创建临时租约。已使用账号不会再次下发；相同 requestId 可在租约期内安全重试。",
+      "下发一个未使用的 Google 账号并锁定 3 分钟。未上报时租约到期自动释放；上报后立即结束租约。已使用账号不会再次下发，相同 requestId 可在租约期内安全重试。",
     sideEffect: true,
     headers: [
       {
@@ -433,7 +434,7 @@ const endpoints: Endpoint[] = [
     response: {
       data: {
         requestId: "google-request-001",
-        leaseExpiresAt: "2026-07-19T12:30:00+08:00",
+        leaseExpiresAt: "2026-07-24T12:03:00+08:00",
         account: {
           googleAccountId: 21,
           mail: "google@example.com",
@@ -954,8 +955,8 @@ async function tryEndpoint(endpoint: Endpoint) {
           />
           <el-alert
             v-if="endpoint.key === 'cardDispatch'"
-            title="单张库存不足时自动创建 Slash 卡"
-            description="count=1 且可用库存为 0 时，系统会使用指定的 Slash 渠道创建新卡；未指定 source 时使用已启用的 Slash 渠道。默认 Card Group ID 为 card_group_3febhaydgdiq9。创建或导入失败时返回 409 INSUFFICIENT_CARDS。请保存响应中的 cardPoolId，验证码查询必须继续使用同一个 API Key。"
+            title="Card 下发后锁定 3 分钟"
+            description="租约期间 Card 不会分配给其他请求；未上报时到期自动释放。used 会解除租约并冷却 5 小时，unavailable 会解除租约并禁用。count=1 且库存不足时，系统会使用 Slash 自动创建；默认 Card Group ID 为 card_group_3febhaydgdiq9。"
             type="info"
             :closable="false"
             show-icon

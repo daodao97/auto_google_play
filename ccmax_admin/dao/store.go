@@ -153,6 +153,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.migrateCardReports(ctx); err != nil {
 		return err
 	}
+	if err := s.migrateCardLease(ctx); err != nil {
+		return err
+	}
 	if err := s.migrateAccountHealth(ctx); err != nil {
 		return err
 	}
@@ -467,6 +470,33 @@ func (s *Store) migrateCardReports(ctx context.Context) error {
 		}
 	}
 	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES(16)`)
+	return err
+}
+
+func (s *Store) migrateCardLease(ctx context.Context) error {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"locked_until", `INTEGER`},
+		{"lock_request_id", `TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, column := range columns {
+		exists, err := s.columnExists(ctx, "card_pool", column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err = s.DB.ExecContext(ctx, `ALTER TABLE card_pool ADD COLUMN `+column.name+` `+column.definition); err != nil {
+			return fmt.Errorf("add card_pool.%s: %w", column.name, err)
+		}
+	}
+	if _, err := s.DB.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_card_pool_lease ON card_pool(status,source,locked_until,cooldown_until,usage_count,last_dispatched_at)`); err != nil {
+		return err
+	}
+	_, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version) VALUES(18)`)
 	return err
 }
 

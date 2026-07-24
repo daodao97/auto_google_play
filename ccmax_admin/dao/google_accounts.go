@@ -102,8 +102,8 @@ func (s *Store) ListGoogleAccounts(ctx context.Context, page, size int, query, s
 
 func (s *Store) DispatchGoogleAccount(ctx context.Context, apiKeyID int64, requestID string, lease time.Duration, ip string) (*GoogleAccount, error) {
 	requestID = strings.TrimSpace(requestID)
-	if requestID == "" {
-		return nil, errors.New("requestId is required")
+	if requestID == "" || lease <= 0 {
+		return nil, errors.New("requestId and positive lease are required")
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -169,6 +169,9 @@ func (s *Store) ReportGoogleAccount(ctx context.Context, apiKeyID int64, request
 		return nil, err
 	}
 	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE google_accounts SET locked_until=NULL,lock_request_id='',updated_at=CURRENT_TIMESTAMP WHERE status='unused' AND locked_until IS NOT NULL AND locked_until<=unixepoch()`); err != nil {
+		return nil, err
+	}
 	var dispatchedID int64
 	if err = tx.QueryRowContext(ctx, `SELECT google_account_id FROM google_account_dispatches WHERE api_key_id=? AND request_id=?`, apiKeyID, requestID).Scan(&dispatchedID); err != nil {
 		return nil, err
@@ -177,7 +180,8 @@ func (s *Store) ReportGoogleAccount(ctx context.Context, apiKeyID int64, request
 		return nil, errors.New("google account does not belong to this dispatch request")
 	}
 	var status, lockRequestID, existingReportStatus string
-	if err = tx.QueryRowContext(ctx, `SELECT status,lock_request_id,COALESCE(NULLIF(report_status,''),'used') FROM google_accounts WHERE id=?`, googleAccountID).Scan(&status, &lockRequestID, &existingReportStatus); err != nil {
+	var lockedUntil sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT status,lock_request_id,locked_until,COALESCE(NULLIF(report_status,''),'used') FROM google_accounts WHERE id=?`, googleAccountID).Scan(&status, &lockRequestID, &lockedUntil, &existingReportStatus); err != nil {
 		return nil, err
 	}
 	if status == "used" {
@@ -193,7 +197,7 @@ func (s *Store) ReportGoogleAccount(ctx context.Context, apiKeyID int64, request
 		}
 		return nil, fmt.Errorf("google account was already reported as %s", existingReportStatus)
 	}
-	if lockRequestID != requestID {
+	if lockRequestID != requestID || !lockedUntil.Valid || lockedUntil.Int64 <= time.Now().Unix() {
 		return nil, errors.New("google account lease has expired or been reassigned")
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE google_accounts SET status='used',report_status=?,claude_account_id=NULL,used_at=CURRENT_TIMESTAMP,locked_until=NULL,lock_request_id='',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='unused'`, reportStatus, googleAccountID); err != nil {

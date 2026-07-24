@@ -17,6 +17,9 @@ interface Card {
   ccv: string;
   usageCount: number;
   status: number;
+  lastDispatchedAt?: string;
+  cooldownUntil?: string;
+  lockedUntil?: string;
 }
 interface ChannelCredential {
   source: string;
@@ -40,7 +43,7 @@ const items = ref<Card[]>([]),
   historyCard = ref<Card>(),
   editing = ref<number>(),
   showSecrets = ref(false);
-const stats = reactive({ available: 0, cooling: 0, total: 0 });
+const stats = reactive({ available: 0, cooling: 0, locked: 0, total: 0 });
 const filters = reactive({ q: "", source: "", status: "" }),
   pager = reactive({ page: 1, size: 20 }),
   form = reactive<Card>({
@@ -174,6 +177,24 @@ function historyStatus(row: Record<string, any>) {
 }
 function prettyHistory(row: Record<string, any>) {
   return JSON.stringify(row, null, 2);
+}
+function dateTime(value?: string) {
+  return value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—";
+}
+function isFuture(value?: string) {
+  return Boolean(value && new Date(value).getTime() > Date.now());
+}
+function statusLabel(item: Card) {
+  if (item.status !== 1) return "不可用";
+  if (isFuture(item.lockedUntil)) return "下发锁定中";
+  if (isFuture(item.cooldownUntil)) return "冷却中";
+  return "可用";
+}
+function statusType(item: Card) {
+  if (item.status !== 1) return "danger";
+  if (isFuture(item.lockedUntil)) return "warning";
+  if (isFuture(item.cooldownUntil)) return "info";
+  return "success";
 }
 async function load() {
   loading.value = true;
@@ -375,12 +396,17 @@ onMounted(load);
 <template>
   <div
     class="metric-grid"
-    style="grid-template-columns: repeat(3, 1fr); margin-bottom: 18px"
+    style="grid-template-columns: repeat(4, 1fr); margin-bottom: 18px"
   >
     <article class="metric">
       <div class="metric-label">当前可用卡数</div>
       <div class="metric-value">{{ stats.available }}</div>
-      <div class="metric-note">启用且不在冷却期</div>
+      <div class="metric-note">启用、未冷却且未锁定</div>
+    </article>
+    <article class="metric">
+      <div class="metric-label">下发锁定中</div>
+      <div class="metric-value">{{ stats.locked }}</div>
+      <div class="metric-note">下发后锁定 3 分钟</div>
     </article>
     <article class="metric">
       <div class="metric-label">冷却卡数</div>
@@ -456,12 +482,20 @@ onMounted(load);
         prop="usageCount"
         label="使用次数"
         width="90"
-      /><el-table-column label="状态" width="90"
+      /><el-table-column label="状态" width="115"
         ><template #default="{ row }"
-          ><el-tag :type="row.status === 1 ? 'success' : 'danger'">{{
-            row.status === 1 ? "可用" : "不可用"
+          ><el-tag :type="statusType(row)">{{
+            statusLabel(row)
           }}</el-tag></template
         ></el-table-column
+      ><el-table-column label="租约到期" width="175"
+        ><template #default="{ row }">{{
+          dateTime(row.lockedUntil)
+        }}</template></el-table-column
+      ><el-table-column label="冷却到期" width="175"
+        ><template #default="{ row }">{{
+          dateTime(row.cooldownUntil)
+        }}</template></el-table-column
       ><el-table-column label="操作" width="205" fixed="right"
         ><template #default="{ row }"
           ><el-button link type="primary" @click="viewHistory(row)"

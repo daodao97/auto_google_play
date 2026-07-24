@@ -268,7 +268,7 @@ Content-Type: application/json
 {
   "data": {
     "requestId": "unique-google-request-id",
-    "leaseExpiresAt": "2026-07-24T12:30:00+08:00",
+    "leaseExpiresAt": "2026-07-24T12:03:00+08:00",
     "account": {
       "googleAccountId": 21,
       "mail": "google@example.com",
@@ -277,6 +277,8 @@ Content-Type: application/json
   }
 }
 ```
+
+Google 账号下发后默认锁定 3 分钟，期间不会分配给其他请求。未上报时租约到期自动释放；上报成功时立即结束租约。租约时长可通过 `GOOGLE_ACCOUNT_DISPATCH_LEASE_MINUTES` 配置。
 
 库存不足时返回 `409 INSUFFICIENT_GOOGLE_ACCOUNTS`。
 
@@ -315,6 +317,8 @@ Content-Type: application/json
 ```
 
 任一结果上报成功后，该账号不再下发。相同结果重复上报为幂等成功；提交不同结果会返回冲突错误。
+
+首次上报必须在 3 分钟租约内完成。租约过期或账号已重新分配时返回租约冲突错误。
 
 # 邮箱账号
 
@@ -425,6 +429,7 @@ Content-Type: application/json
 {
   "data": {
     "requestId": "unique-card-request-id",
+    "leaseExpiresAt": "2026-07-24T12:03:00+08:00",
     "count": 1,
     "cards": [
       {
@@ -440,7 +445,9 @@ Content-Type: application/json
 }
 ```
 
-系统按使用次数、最近下发时间和本地 ID 选择已启用且不在冷却期的卡。
+系统按使用次数、最近下发时间和本地 ID 选择已启用、未锁定且不在冷却期的卡。
+
+Card 下发后默认锁定 3 分钟，期间不会分配给其他请求。未上报时租约到期自动释放；上报 `used` 或 `unavailable` 时立即结束租约。租约时长可通过 `CARD_DISPATCH_LEASE_MINUTES` 配置。
 
 ### 单张库存不足时自动创建
 
@@ -499,8 +506,8 @@ Content-Type: application/json
 
 | 状态 | 结果 |
 | --- | --- |
-| `used` | 使用次数增加一次，并进入 5 小时冷却期。 |
-| `unavailable` | Card 标记为不可用，不再参与下发。 |
+| `used` | 立即解除租约，使用次数增加一次，并进入 5 小时冷却期。 |
+| `unavailable` | 立即解除租约，Card 标记为不可用，不再参与下发。 |
 
 成功响应：
 
@@ -514,6 +521,8 @@ Content-Type: application/json
 ```
 
 相同结果重复上报不会重复计数；同一次下发提交不同结果会返回冲突错误。
+
+首次上报必须在 3 分钟租约内完成。租约过期或 Card 已重新分配时返回租约冲突错误。
 
 ## 上传验证码渠道凭证
 

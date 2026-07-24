@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -214,18 +215,21 @@ func TestUpgradeAccountCoolsCardForFiveHours(t *testing.T) {
 	if err != nil || stats.Available != 1 || stats.Cooling != 1 || stats.Total != 2 {
 		t.Fatalf("unexpected card stats during cooldown: %#v %v", stats, err)
 	}
-	dispatched, err := s.DispatchCards(ctx, keyID, "during-cooldown", "qbit", 1, "127.0.0.1")
+	dispatched, err := s.DispatchCards(ctx, keyID, "during-cooldown", "qbit", 1, 3*time.Minute, "127.0.0.1")
 	if err != nil || len(dispatched) != 1 || dispatched[0].ID != cardIDs[1] {
 		t.Fatalf("cooled card was dispatched: %#v %v", dispatched, err)
 	}
 	if _, err = s.DB.ExecContext(ctx, `UPDATE card_pool SET cooldown_until=? WHERE id=?`, time.Now().Add(-time.Minute), cardIDs[0]); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = s.DB.ExecContext(ctx, `UPDATE card_pool SET locked_until=? WHERE id=?`, time.Now().Add(-time.Minute).Unix(), cardIDs[1]); err != nil {
+		t.Fatal(err)
+	}
 	stats, err = s.CardStats(ctx)
 	if err != nil || stats.Available != 2 || stats.Cooling != 0 || stats.Total != 2 {
 		t.Fatalf("unexpected card stats after cooldown: %#v %v", stats, err)
 	}
-	dispatched, err = s.DispatchCards(ctx, keyID, "after-cooldown", "qbit", 2, "127.0.0.1")
+	dispatched, err = s.DispatchCards(ctx, keyID, "after-cooldown", "qbit", 2, 3*time.Minute, "127.0.0.1")
 	if err != nil || len(dispatched) != 2 || dispatched[0].ID != cardIDs[1] || dispatched[1].ID != cardIDs[0] {
 		t.Fatalf("expired cooldown card was not reusable: %#v %v", dispatched, err)
 	}
@@ -310,15 +314,15 @@ func TestCardDispatchReportIdempotencyAndOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	first, err := s.DispatchCards(t.Context(), keyID, "card-request-1", "qbit", 2, "127.0.0.1")
-	if err != nil || len(first) != 2 || first[0].UsageCount != 0 || first[0].LastDispatchedAt == nil {
+	first, err := s.DispatchCards(t.Context(), keyID, "card-request-1", "qbit", 2, 3*time.Minute, "127.0.0.1")
+	if err != nil || len(first) != 2 || first[0].UsageCount != 0 || first[0].LastDispatchedAt == nil || first[0].LockedUntil == nil || first[0].LockRequestID != "card-request-1" {
 		t.Fatalf("unexpected card dispatch: %#v %v", first, err)
 	}
-	retry, err := s.DispatchCards(t.Context(), keyID, "card-request-1", "qbit", 2, "127.0.0.1")
+	retry, err := s.DispatchCards(t.Context(), keyID, "card-request-1", "qbit", 2, 3*time.Minute, "127.0.0.1")
 	if err != nil || retry[0].ID != first[0].ID || retry[1].ID != first[1].ID {
 		t.Fatalf("card idempotency changed result: %#v %v", retry, err)
 	}
-	third, err := s.DispatchCards(t.Context(), keyID, "card-request-2", "qbit", 1, "127.0.0.1")
+	third, err := s.DispatchCards(t.Context(), keyID, "card-request-2", "qbit", 1, 3*time.Minute, "127.0.0.1")
 	if err != nil || third[0].ID == first[0].ID || third[0].ID == first[1].ID {
 		t.Fatalf("least-used card was not selected: %#v %v", third, err)
 	}
@@ -328,23 +332,85 @@ func TestCardDispatchReportIdempotencyAndOwnership(t *testing.T) {
 	if _, err = s.CardByIDForAPIKey(t.Context(), first[0].ID, otherKeyID); !IsNoRows(err) {
 		t.Fatalf("other API key accessed card: %v", err)
 	}
-	reassigned, err := s.DispatchCards(t.Context(), otherKeyID, "other-card-request", "qbit", 1, "127.0.0.1")
+	if _, err = s.DispatchCards(t.Context(), otherKeyID, "other-card-request", "qbit", 1, 3*time.Minute, "127.0.0.1"); err == nil {
+		t.Fatal("locked card was dispatched to another request")
+	}
+	if _, err = s.DB.ExecContext(t.Context(), `UPDATE card_pool SET locked_until=? WHERE id=?`, time.Now().Add(-time.Minute).Unix(), first[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	oldRetry, err := s.DispatchCards(t.Context(), keyID, "card-request-1", "qbit", 2, 3*time.Minute, "127.0.0.1")
+	if err == nil || !strings.Contains(err.Error(), "idempotency lease has expired") {
+		t.Fatalf("expired card idempotency key was accepted: %#v %v", oldRetry, err)
+	}
+	reassigned, err := s.DispatchCards(t.Context(), otherKeyID, "other-card-request", "qbit", 1, 3*time.Minute, "127.0.0.1")
 	if err != nil || reassigned[0].ID != first[0].ID {
-		t.Fatalf("card was not immediately reusable: %#v %v", reassigned, err)
+		t.Fatalf("expired card lease was not reusable: %#v %v", reassigned, err)
 	}
 	if _, err = s.CardByIDForAPIKey(t.Context(), first[0].ID, keyID); err != nil {
 		t.Fatalf("previous dispatcher lost verification access to reusable card: %v", err)
 	}
-	oldRetry, err := s.DispatchCards(t.Context(), keyID, "card-request-1", "qbit", 2, "127.0.0.1")
-	if err != nil || oldRetry[0].ID != first[0].ID {
-		t.Fatalf("card idempotency retry did not return original result: %#v %v", oldRetry, err)
-	}
 	reported, err := s.ReportCardUnavailable(t.Context(), otherKeyID, "other-card-request", reassigned[0].ID)
-	if err != nil || reported.Status != -1 {
+	if err != nil || reported.Status != -1 || reported.LockedUntil != nil || reported.LockRequestID != "" {
 		t.Fatalf("card unavailable report was not applied: %#v %v", reported, err)
 	}
 	if _, err = s.ReportCardUnavailable(t.Context(), otherKeyID, "other-card-request", reassigned[0].ID); err != nil {
 		t.Fatalf("card unavailable report should be idempotent: %v", err)
+	}
+}
+
+func TestCardLeaseExpiryAndLateReport(t *testing.T) {
+	s := testStore(t)
+	_, keyID := seedAdminAndKey(t, s)
+	cardID, err := s.CreateCard(t.Context(), Card{
+		Source: "qbit", CardID: "lease-card", CardNo: "4111111111110303", ExpireMMYY: "1230", CCV: "303",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatched, err := s.DispatchCards(t.Context(), keyID, "card-lease-1", "qbit", 1, 3*time.Minute, "127.0.0.1")
+	if err != nil || dispatched[0].ID != cardID || dispatched[0].LockedUntil == nil || dispatched[0].LockedUntil.Sub(time.Now()) < 2*time.Minute+55*time.Second {
+		t.Fatalf("card did not receive a three-minute lease: %#v %v", dispatched, err)
+	}
+	if _, err = s.DB.ExecContext(t.Context(), `UPDATE card_pool SET locked_until=? WHERE id=?`, time.Now().Add(-time.Minute).Unix(), cardID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReportCard(t.Context(), keyID, "card-lease-1", cardID, "used", "late"); err == nil || !strings.Contains(err.Error(), "lease has expired") {
+		t.Fatalf("late card report was accepted: %v", err)
+	}
+	reused, err := s.DispatchCards(t.Context(), keyID, "card-lease-2", "qbit", 1, 3*time.Minute, "127.0.0.1")
+	if err != nil || reused[0].ID != cardID {
+		t.Fatalf("expired card lease was not released: %#v %v", reused, err)
+	}
+	reported, err := s.ReportCard(t.Context(), keyID, "card-lease-2", cardID, "used", "")
+	if err != nil || reported.UsageCount != 1 || reported.CooldownUntil == nil || reported.LockedUntil != nil || reported.LockRequestID != "" {
+		t.Fatalf("card report did not unlock and cool the card: %#v %v", reported, err)
+	}
+}
+
+func TestGoogleAccountLeaseExpiryAndLateReport(t *testing.T) {
+	s := testStore(t)
+	_, keyID := seedAdminAndKey(t, s)
+	accountID, err := s.CreateGoogleAccount(t.Context(), "google-lease@example.com", "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatched, err := s.DispatchGoogleAccount(t.Context(), keyID, "google-lease-1", 3*time.Minute, "127.0.0.1")
+	if err != nil || dispatched.ID != accountID || dispatched.LockedUntil == nil || dispatched.LockedUntil.Sub(time.Now()) < 2*time.Minute+55*time.Second {
+		t.Fatalf("Google account did not receive a three-minute lease: %#v %v", dispatched, err)
+	}
+	if _, err = s.DB.ExecContext(t.Context(), `UPDATE google_accounts SET locked_until=? WHERE id=?`, time.Now().Add(-time.Minute).Unix(), accountID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReportGoogleAccount(t.Context(), keyID, "google-lease-1", accountID, "used"); err == nil || !strings.Contains(err.Error(), "lease has expired") {
+		t.Fatalf("late Google account report was accepted: %v", err)
+	}
+	reused, err := s.DispatchGoogleAccount(t.Context(), keyID, "google-lease-2", 3*time.Minute, "127.0.0.1")
+	if err != nil || reused.ID != accountID {
+		t.Fatalf("expired Google account lease was not released: %#v %v", reused, err)
+	}
+	reported, err := s.ReportGoogleAccount(t.Context(), keyID, "google-lease-2", accountID, "used")
+	if err != nil || reported.Status != "used" || reported.LockedUntil != nil || reported.LockRequestID != "" {
+		t.Fatalf("Google account report did not finalize and unlock: %#v %v", reported, err)
 	}
 }
 

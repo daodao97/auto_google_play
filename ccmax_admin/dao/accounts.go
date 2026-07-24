@@ -244,7 +244,7 @@ func (s *Store) UpgradeAccount(ctx context.Context, mail, plan string, upgradedA
 	if alreadyReported > 0 {
 		usageIncrement = 0
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE card_pool SET usage_count=usage_count+?,cooldown_until=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, usageIncrement, time.Now().Add(CardCooldown), cardPoolID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE card_pool SET usage_count=usage_count+?,cooldown_until=?,locked_until=NULL,lock_request_id='',updated_at=CURRENT_TIMESTAMP WHERE id=?`, usageIncrement, time.Now().Add(CardCooldown), cardPoolID); err != nil {
 		return nil, err
 	}
 	a, err := scanAccount(tx.QueryRowContext(ctx, `SELECT `+accountColumns+` FROM claude_accounts WHERE mail=? COLLATE NOCASE`, strings.TrimSpace(mail)))
@@ -463,12 +463,12 @@ func (s *Store) Dashboard(ctx context.Context) (map[string]any, error) {
 	}
 	result := map[string]any{}
 	queries := map[string]string{
-		"freeAccounts":   `SELECT count(*) FROM claude_accounts a WHERE plan='free' AND status=1 AND alive_status<>'dead' AND delivery_status='available' AND NOT EXISTS(SELECT 1 FROM order_accounts oa WHERE oa.account_id=a.id)`,
-		"maxAccounts":    `SELECT count(*) FROM claude_accounts a WHERE plan='max_20x' AND status=1 AND alive_status<>'dead' AND delivery_status IN ('available','upgraded') AND NOT EXISTS(SELECT 1 FROM order_accounts oa WHERE oa.account_id=a.id)`,
-		"plusCDKs":       `SELECT count(*) FROM chatgpt_cdks c WHERE sku='plus' AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id)`,
-		"proCDKs":        `SELECT count(*) FROM chatgpt_cdks c WHERE sku='pro' AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id)`,
-		"proliteCDKs":    `SELECT count(*) FROM chatgpt_cdks c WHERE sku='prolite' AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id)`,
-		"availableCards": `SELECT count(*) FROM card_pool WHERE status=1`, "orders": `SELECT count(*) FROM orders`,
+		"freeAccounts":    `SELECT count(*) FROM claude_accounts a WHERE plan='free' AND status=1 AND alive_status<>'dead' AND delivery_status='available' AND NOT EXISTS(SELECT 1 FROM order_accounts oa WHERE oa.account_id=a.id)`,
+		"maxAccounts":     `SELECT count(*) FROM claude_accounts a WHERE plan='max_20x' AND status=1 AND alive_status<>'dead' AND delivery_status IN ('available','upgraded') AND NOT EXISTS(SELECT 1 FROM order_accounts oa WHERE oa.account_id=a.id)`,
+		"plusCDKs":        `SELECT count(*) FROM chatgpt_cdks c WHERE sku='plus' AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id)`,
+		"proCDKs":         `SELECT count(*) FROM chatgpt_cdks c WHERE sku='pro' AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id)`,
+		"proliteCDKs":     `SELECT count(*) FROM chatgpt_cdks c WHERE sku='prolite' AND status='available' AND NOT EXISTS(SELECT 1 FROM order_cdks oc WHERE oc.cdk_id=c.id)`,
+		"orders":          `SELECT count(*) FROM orders`,
 		"todayDispatches": `SELECT count(*) FROM claude_account_dispatches WHERE created_at>=date('now','localtime')`,
 		"todaySalesCents": `SELECT COALESCE(sum(sale_price_cents),0) FROM orders WHERE status='allocated' AND created_at>=date('now','localtime')`,
 	}
@@ -479,6 +479,11 @@ func (s *Store) Dashboard(ctx context.Context) (map[string]any, error) {
 		}
 		result[key] = n
 	}
+	cardStats, err := s.CardStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result["availableCards"] = int64(cardStats.Available)
 	return result, nil
 }
 
