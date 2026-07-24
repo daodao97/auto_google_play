@@ -289,6 +289,17 @@ func (s *Store) Credential(ctx context.Context, source string) (string, error) {
 	err := s.DB.QueryRowContext(ctx, `SELECT token FROM channel_credentials WHERE source=? COLLATE NOCASE AND status=1`, strings.TrimSpace(source)).Scan(&token)
 	return token, err
 }
+
+func (s *Store) CredentialSourceByPrefix(ctx context.Context, prefix string) (string, error) {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	if prefix == "" {
+		return "", errors.New("credential source prefix is required")
+	}
+	var source string
+	err := s.DB.QueryRowContext(ctx, `SELECT source FROM channel_credentials WHERE status=1 AND lower(source) LIKE ? ORDER BY CASE WHEN lower(source)=? THEN 0 ELSE 1 END,source LIMIT 1`, prefix+"%", prefix).Scan(&source)
+	return source, err
+}
+
 func (s *Store) SetCredential(ctx context.Context, source, token string) error {
 	source = strings.ToLower(strings.TrimSpace(source))
 	token = strings.TrimSpace(token)

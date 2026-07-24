@@ -59,7 +59,7 @@ const filters = reactive({ q: "", source: "", status: "" }),
     name: randomSlashCardName(),
     accountId: "",
     virtualAccountId: "",
-    cardGroupId: "ccmax",
+    cardGroupId: "card_group_3febhaydgdiq9",
     cardProductId: "",
     legalEntity: "",
     isSingleUse: false,
@@ -250,7 +250,7 @@ async function openSlashCreate() {
     name: randomSlashCardName(),
     accountId: "",
     virtualAccountId: "",
-    cardGroupId: "ccmax",
+    cardGroupId: "card_group_3febhaydgdiq9",
     cardProductId: "",
     legalEntity: "",
     isSingleUse: false,
@@ -573,7 +573,7 @@ onMounted(load);
       </el-row>
       <el-row :gutter="16">
         <el-col :span="12">
-          <el-form-item label="Card Group ID（可选）">
+          <el-form-item label="Card Group ID">
             <el-input v-model="slashForm.cardGroupId" />
           </el-form-item>
         </el-col>

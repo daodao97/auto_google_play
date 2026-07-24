@@ -1,5 +1,12 @@
 # 开发计划
 
+## 2026-07-24
+
+- [x] Slash 创建卡的默认 Card Group ID 更新为 `card_group_3febhaydgdiq9`。
+- [x] 单张 Card 库存不足时自动创建 Slash 卡并完成下发。
+- [x] 自动创建失败时保持 `INSUFFICIENT_CARDS` 错误协议。
+- [x] 更新管理后台接口文档并新增完整的对外 API 文档。
+
 ## 2026-07-23
 
 - [x] `/api/card/report` 支持 `used` 与 `unavailable` 两种结果。

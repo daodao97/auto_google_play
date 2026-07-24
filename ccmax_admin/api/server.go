@@ -41,6 +41,7 @@ type Server struct {
 	registrationScheduleInterval time.Duration
 	registrationSchedulerOnce    sync.Once
 	registrationSchedulerStop    chan struct{}
+	cardAutoCreateMu             sync.Mutex
 	chatGPTRedeemBaseURL         string
 	chatGPTRedeemAPIKey          string
 	chatGPTRedeemHTTPClient      *http.Client
@@ -216,7 +217,7 @@ func handleStoreError(c *gin.Context, err error) {
 		fail(c, 409, "INSUFFICIENT_GOOGLE_ACCOUNTS", err)
 	case strings.Contains(err.Error(), "insufficient mail accounts"):
 		fail(c, 409, "INSUFFICIENT_MAIL_ACCOUNTS", err)
-	case strings.Contains(err.Error(), "insufficient cards"):
+	case isInsufficientCardsError(err):
 		fail(c, 409, "INSUFFICIENT_CARDS", err)
 	case strings.Contains(err.Error(), "insufficient chatgpt cdks"):
 		fail(c, 409, "INSUFFICIENT_CHATGPT_CDKS", err)
@@ -227,6 +228,10 @@ func handleStoreError(c *gin.Context, err error) {
 	default:
 		fail(c, 400, "OPERATION_FAILED", err)
 	}
+}
+
+func isInsufficientCardsError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "insufficient cards")
 }
 
 func (s *Server) login(c *gin.Context) {
@@ -1067,7 +1072,7 @@ func (s *Server) dispatchCards(c *gin.Context) {
 		requestID = "card_" + randomToken(16)
 	}
 	key := currentAPIKey(c)
-	items, err := s.store.DispatchCards(c.Request.Context(), key.ID, requestID, req.Source, req.Count, clientIP(c))
+	items, err := s.dispatchCardsWithAutoCreate(c.Request.Context(), key.ID, requestID, req.Source, req.Count, clientIP(c))
 	if err != nil {
 		handleStoreError(c, err)
 		return
@@ -1078,6 +1083,30 @@ func (s *Server) dispatchCards(c *gin.Context) {
 	}
 	s.store.Audit(c.Request.Context(), "api_key", key.ID, "dispatch_cards", "card_pool", "", fmt.Sprintf(`{"requestId":%q,"count":%d}`, requestID, len(cards)), clientIP(c))
 	ok(c, gin.H{"requestId": requestID, "count": len(cards), "cards": cards})
+}
+
+func (s *Server) dispatchCardsWithAutoCreate(ctx context.Context, apiKeyID int64, requestID, source string, count int, ip string) ([]dao.Card, error) {
+	items, err := s.store.DispatchCards(ctx, apiKeyID, requestID, source, count, ip)
+	if err == nil || count != 1 || !isInsufficientCardsError(err) {
+		return items, err
+	}
+
+	s.cardAutoCreateMu.Lock()
+	defer s.cardAutoCreateMu.Unlock()
+
+	items, err = s.store.DispatchCards(ctx, apiKeyID, requestID, source, count, ip)
+	if err == nil || !isInsufficientCardsError(err) {
+		return items, err
+	}
+	insufficientErr := err
+	if createErr := s.createSlashCardForDispatch(ctx, source); createErr != nil {
+		return nil, insufficientErr
+	}
+	items, err = s.store.DispatchCards(ctx, apiKeyID, requestID, source, count, ip)
+	if isInsufficientCardsError(err) {
+		return nil, insufficientErr
+	}
+	return items, err
 }
 
 func (s *Server) reportCards(c *gin.Context) {

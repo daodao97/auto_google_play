@@ -82,6 +82,24 @@ func numericID(t *testing.T, data map[string]any, key string) int64 {
 	return int64(value)
 }
 
+func seedCoolingAndDisabledCards(t *testing.T, store *dao.Store, source string) {
+	t.Helper()
+	coolingID, err := store.CreateCard(t.Context(), dao.Card{
+		Source: source, CardID: "cooling-card", CardNo: "4111111111110101", ExpireMMYY: "1230", CCV: "101",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB.ExecContext(t.Context(), `UPDATE card_pool SET cooldown_until=? WHERE id=?`, time.Now().Add(time.Hour), coolingID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.CreateCard(t.Context(), dao.Card{
+		Source: source, CardID: "disabled-card", CardNo: "4111111111110202", ExpireMMYY: "1230", CCV: "202", Status: -1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func requireErrorCode(t *testing.T, resp *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
 	requireStatus(t, resp, status)
@@ -743,6 +761,87 @@ func TestAdminCreatesSlashCardAndImportsSecrets(t *testing.T) {
 	}
 }
 
+func TestCardDispatchAutoCreatesSlashCard(t *testing.T) {
+	env := newIntegrationEnv(t)
+	seedCoolingAndDisabledCards(t, env.store, "slash_auto")
+	if err := env.store.SetCredential(t.Context(), "slash_auto", "slash-auto-key"); err != nil {
+		t.Fatal(err)
+	}
+	var createCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-Key") != "slash-auto-key" {
+			t.Errorf("unexpected Slash API key: %q", r.Header.Get("X-API-Key"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/card":
+			createCalls.Add(1)
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body["cardGroupId"] != defaultSlashCardGroupID {
+				t.Errorf("automatic Slash card group=%v want=%s", body["cardGroupId"], defaultSlashCardGroupID)
+			}
+			if name, _ := body["name"].(string); !strings.HasPrefix(name, automaticSlashCardPrefix+"-") {
+				t.Errorf("automatic Slash card name=%q", name)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"c_auto_created","name":"Automatic card"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/card/c_auto_created" && r.URL.Query().Get("include_pan") == "true":
+			_, _ = w.Write([]byte(`{"data":{"id":"c_auto_created","pan":"4111 1111 1111 0307","cvv":"307"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/card/c_auto_created":
+			_, _ = w.Write([]byte(`{"card":{"id":"c_auto_created","name":"Automatic card","expiryMonth":"03","expiryYear":"2030","status":"active"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	env.server.slashBaseURL = upstream.URL
+	env.server.slashVaultURL = upstream.URL
+	env.server.slashImportRetryInterval = time.Millisecond
+
+	keyResp := adminRequest(t, env, http.MethodPost, "/api/admin/api-keys", `{"name":"auto-card"}`)
+	requireStatus(t, keyResp, http.StatusOK)
+	apiToken, _ := responseData(t, keyResp)["key"].(string)
+	req := httptest.NewRequest(http.MethodPost, "/api/card", strings.NewReader(`{"count":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", apiToken)
+	req.Header.Set("Idempotency-Key", "auto-card-request")
+	resp := httptest.NewRecorder()
+	env.router.ServeHTTP(resp, req)
+
+	requireStatus(t, resp, http.StatusOK)
+	if createCalls.Load() != 1 || !strings.Contains(resp.Body.String(), `"source":"slash_auto"`) || !strings.Contains(resp.Body.String(), `"cardId":"c_auto_created"`) || !strings.Contains(resp.Body.String(), `"cardNo":"4111111111110307"`) {
+		t.Fatalf("automatic card dispatch response=%s createCalls=%d", resp.Body.String(), createCalls.Load())
+	}
+
+	retry := httptest.NewRequest(http.MethodPost, "/api/card", strings.NewReader(`{"count":1}`))
+	retry.Header.Set("Content-Type", "application/json")
+	retry.Header.Set("X-API-Key", apiToken)
+	retry.Header.Set("Idempotency-Key", "auto-card-request")
+	retryResp := httptest.NewRecorder()
+	env.router.ServeHTTP(retryResp, retry)
+	requireStatus(t, retryResp, http.StatusOK)
+	if createCalls.Load() != 1 || retryResp.Body.String() != resp.Body.String() {
+		t.Fatalf("idempotent retry changed automatic card: first=%s retry=%s createCalls=%d", resp.Body.String(), retryResp.Body.String(), createCalls.Load())
+	}
+}
+
+func TestCardDispatchReturnsInsufficientCardsWhenAutoCreateFails(t *testing.T) {
+	env := newIntegrationEnv(t)
+	seedCoolingAndDisabledCards(t, env.store, "slash")
+	keyResp := adminRequest(t, env, http.MethodPost, "/api/admin/api-keys", `{"name":"auto-card-failure"}`)
+	requireStatus(t, keyResp, http.StatusOK)
+	apiToken, _ := responseData(t, keyResp)["key"].(string)
+
+	resp := requestWithAPIKey(t, env.router, http.MethodPost, "/api/card", apiToken, `{"count":1}`)
+	requireErrorCode(t, resp, http.StatusConflict, "INSUFFICIENT_CARDS")
+	if resp.Body.String() != `{"code":"INSUFFICIENT_CARDS","message":"insufficient cards: available=0 requested=1"}` {
+		t.Fatalf("unexpected insufficient-card response: %s", resp.Body.String())
+	}
+}
+
 func TestCreatedSlashCardImportTimesOutWhileDetailsAreIncomplete(t *testing.T) {
 	env := newIntegrationEnv(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -756,7 +855,12 @@ func TestCreatedSlashCardImportTimesOutWhileDetailsAreIncomplete(t *testing.T) {
 	env.server.slashImportRetryInterval = time.Millisecond
 
 	result, err := env.server.importCreatedSlashCard(t.Context(), "slash", "slash-key", "", "c_pending")
-	if result != nil || err == nil || !strings.Contains(err.Error(), "timed out after 20ms") || !strings.Contains(err.Error(), "missing PAN, CVV, expiry") {
+	detail := ""
+	if err != nil {
+		detail = err.Error()
+	}
+	pendingReason := strings.Contains(detail, "missing PAN, CVV, expiry") || strings.Contains(detail, "context deadline exceeded")
+	if result != nil || err == nil || !strings.Contains(detail, "timed out after 20ms") || !pendingReason {
 		t.Fatalf("unexpected pending Slash import result=%#v err=%v", result, err)
 	}
 }

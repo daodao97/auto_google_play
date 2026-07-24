@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 
 type EndpointKey =
@@ -16,11 +16,12 @@ type EndpointKey =
   | "mailDispatch"
   | "mailReport"
   | "cdkCheck"
-  | "cdkRedeem";
+  | "cdkRedeem"
+  | "cdkTask";
 interface Endpoint {
   key: EndpointKey;
   title: string;
-  method: "POST";
+  method: "GET" | "POST";
   path: string;
   summary: string;
   sideEffect: boolean;
@@ -231,7 +232,7 @@ const endpoints: Endpoint[] = [
     method: "POST",
     path: "/api/card",
     summary:
-      "从 Card Pool 下发一张或多张启用且不在冷却期的卡。下发本身不增加使用次数；升级成功上报后，对应卡的使用次数加一并冷却 5 小时。系统按使用次数和最近下发时间均衡选择。",
+      "从 Card Pool 下发一张或多张启用且不在冷却期的卡。请求一张卡且库存不足时，系统会尝试通过 Slash 创建新卡、写入 Card Pool 并直接返回；创建失败后返回 409 INSUFFICIENT_CARDS。下发本身不增加使用次数，使用结果上报后对应卡冷却 5 小时。",
     sideEffect: true,
     headers: [
       {
@@ -256,10 +257,11 @@ const endpoints: Endpoint[] = [
         name: "source",
         type: "string",
         required: false,
-        description: "指定卡来源，例如 qbit；省略时从所有来源选择",
+        description:
+          "指定卡来源。slash 或 slash_* 支持库存不足时自动创建；省略时从所有来源选择，并在需要创建时使用已启用的 Slash 渠道",
       },
     ],
-    request: { count: 1, source: "qbit" },
+    request: { count: 1, source: "slash" },
     response: {
       data: {
         requestId: "card-request-001",
@@ -267,7 +269,7 @@ const endpoints: Endpoint[] = [
         cards: [
           {
             cardPoolId: 12,
-            source: "qbit",
+            source: "slash",
             cardId: "channel-card-id",
             cardNo: "4111111111111111",
             expireMmyy: "1228",
@@ -614,6 +616,37 @@ const endpoints: Endpoint[] = [
     request: { code: "550e8400-e29b-41d4-a716-446655440000", channel: "official", session: "{\"accessToken\":\"example_token\",\"userId\":\"123456\"}" },
     response: { data: { taskId: "ctk_2gR8vL7kYpQ4mN6xT1cD9aB3sE0", status: "pending", createdAt: "2026-07-21T11:30:00.000Z" } },
   },
+  {
+    key: "cdkTask",
+    title: "查询 ChatGPT CDK 兑换任务",
+    method: "GET",
+    path: "/api/chatgpt/cdk/tasks/{taskId}",
+    summary:
+      "使用兑换接口返回的本地 taskId 查询任务状态。只能查询由当前 API Key 创建的任务；响应中的状态达到 success 或 failed 后可停止轮询。",
+    sideEffect: false,
+    headers: [
+      {
+        name: "X-API-Key",
+        required: true,
+        description: "必须与提交兑换任务时使用同一个 API Key",
+      },
+    ],
+    fields: [
+      {
+        name: "taskId",
+        type: "path string",
+        required: true,
+        description: "兑换接口返回的不可预测 taskId",
+      },
+    ],
+    request: { taskId: "ctk_2gR8vL7kYpQ4mN6xT1cD9aB3sE0" },
+    response: {
+      data: {
+        taskId: "ctk_2gR8vL7kYpQ4mN6xT1cD9aB3sE0",
+        status: "success",
+      },
+    },
+  },
 ];
 
 const apiKey = ref("");
@@ -634,6 +667,7 @@ const bodies = reactive<Record<EndpointKey, string>>({
   mailReport: JSON.stringify(endpoints[11].request, null, 2),
   cdkCheck: JSON.stringify(endpoints[12].request, null, 2),
   cdkRedeem: JSON.stringify(endpoints[13].request, null, 2),
+  cdkTask: JSON.stringify(endpoints[14].request, null, 2),
 });
 const results = reactive<
   Record<
@@ -655,6 +689,7 @@ const results = reactive<
   mailReport: {},
   cdkCheck: {},
   cdkRedeem: {},
+  cdkTask: {},
 });
 const loading = reactive<Record<EndpointKey, boolean>>({
   add: false,
@@ -671,16 +706,23 @@ const loading = reactive<Record<EndpointKey, boolean>>({
   mailReport: false,
   cdkCheck: false,
   cdkRedeem: false,
+  cdkTask: false,
 });
-const origin = computed(() =>
-  typeof location === "undefined" ? "http://127.0.0.1:4001" : location.origin,
-);
+const baseURL = "https://aicdk.shop";
+
+function requestPath(
+  endpoint: Endpoint,
+  payload: Record<string, unknown>,
+): string {
+  return endpoint.path.replace(/\{(\w+)\}/g, (_, key: string) =>
+    encodeURIComponent(String(payload[key] ?? `{${key}}`)),
+  );
+}
 
 function curl(endpoint: Endpoint): string {
-  const headers = [
-    `-H 'X-API-Key: YOUR_API_KEY'`,
-    `-H 'Content-Type: application/json'`,
-  ];
+  const headers = [`-H 'X-API-Key: YOUR_API_KEY'`];
+  if (endpoint.method === "POST")
+    headers.push(`-H 'Content-Type: application/json'`);
   if (
     endpoint.key === "dispatch" ||
     endpoint.key === "cardDispatch" ||
@@ -690,11 +732,15 @@ function curl(endpoint: Endpoint): string {
     headers.push(`-H 'Idempotency-Key: request-001'`);
   if (endpoint.key === "verify")
     headers.push(`-H 'Fingerprint: optional-fingerprint'`);
-  return [
-    `curl -X POST '${origin.value}${endpoint.path}' \\`,
-    ...headers.map((header) => `  ${header} \\`),
-    `  -d '${JSON.stringify(endpoint.request)}'`,
-  ].join("\n");
+  const lines = [
+    `curl -X ${endpoint.method} '${baseURL}${requestPath(endpoint, endpoint.request)}'`,
+    ...headers.map((header) => `  ${header}`),
+  ];
+  if (endpoint.method === "POST")
+    lines.push(`  -d '${JSON.stringify(endpoint.request)}'`);
+  return lines
+    .map((line, index) => (index < lines.length - 1 ? `${line} \\` : line))
+    .join("\n");
 }
 
 async function copy(value: string) {
@@ -707,11 +753,14 @@ async function tryEndpoint(endpoint: Endpoint) {
     ElMessage.warning("请先填写 API Key");
     return;
   }
-  let payload: unknown;
+  let payload: Record<string, unknown>;
   try {
-    payload = JSON.parse(bodies[endpoint.key]);
+    const parsed = JSON.parse(bodies[endpoint.key]);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("request JSON must be an object");
+    payload = parsed;
   } catch {
-    ElMessage.error("请求 JSON 格式不正确");
+    ElMessage.error("请求 JSON 必须是对象");
     return;
   }
   if (endpoint.sideEffect) {
@@ -734,9 +783,10 @@ async function tryEndpoint(endpoint: Endpoint) {
   const started = performance.now();
   try {
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
       "X-API-Key": apiKey.value.trim(),
     };
+    if (endpoint.method === "POST")
+      headers["Content-Type"] = "application/json";
     if (
       endpoint.key === "dispatch" ||
       endpoint.key === "cardDispatch" ||
@@ -747,10 +797,10 @@ async function tryEndpoint(endpoint: Endpoint) {
         idempotencyKey.value.trim() || `docs-${Date.now()}`;
     if (endpoint.key === "verify" && fingerprint.value.trim())
       headers.Fingerprint = fingerprint.value.trim();
-    const response = await fetch(endpoint.path, {
-      method: "POST",
+    const response = await fetch(requestPath(endpoint, payload), {
+      method: endpoint.method,
       headers,
-      body: JSON.stringify(payload),
+      body: endpoint.method === "POST" ? JSON.stringify(payload) : undefined,
     });
     const text = await response.text();
     let formatted = text;
@@ -786,7 +836,7 @@ async function tryEndpoint(endpoint: Endpoint) {
             鉴权。在线调试会直接请求当前环境。
           </p>
         </div>
-        <el-tag type="success" effect="plain">Base URL: {{ origin }}</el-tag>
+        <el-tag type="success" effect="plain">Base URL: {{ baseURL }}</el-tag>
       </div>
       <el-alert
         title="安全提示：API Key 仅保存在当前页面内，刷新后会清空。在线调试会真实修改当前环境数据。"
@@ -904,16 +954,16 @@ async function tryEndpoint(endpoint: Endpoint) {
           />
           <el-alert
             v-if="endpoint.key === 'cardDispatch'"
-            title="请保存 cardPoolId"
-            description="验证码接口只接收 cardPoolId，不再传输完整卡号；查询验证码时必须继续使用下发这张卡的同一个 API Key。"
+            title="单张库存不足时自动创建 Slash 卡"
+            description="count=1 且可用库存为 0 时，系统会使用指定的 Slash 渠道创建新卡；未指定 source 时使用已启用的 Slash 渠道。默认 Card Group ID 为 card_group_3febhaydgdiq9。创建或导入失败时返回 409 INSUFFICIENT_CARDS。请保存响应中的 cardPoolId，验证码查询必须继续使用同一个 API Key。"
             type="info"
             :closable="false"
             show-icon
           />
           <el-alert
             v-if="endpoint.key === 'cardReport'"
-            title="上报后立即停止下发"
-            description="Card 状态会变为不可用（status = -1）。重复提交相同上报是安全的，管理员仍可在 Card Pool 中重新启用。"
+            title="上报结果决定后续状态"
+            description="used 会增加一次使用次数并进入 5 小时冷却期；unavailable 会将 Card 标记为不可用。重复提交相同结果是安全的，不会重复计数。"
             type="warning"
             :closable="false"
             show-icon
@@ -942,7 +992,7 @@ async function tryEndpoint(endpoint: Endpoint) {
               ></el-table-column
             ><el-table-column prop="description" label="说明"
           /></el-table>
-          <h4>JSON 参数</h4>
+          <h4>{{ endpoint.method === "GET" ? "路径参数" : "JSON 参数" }}</h4>
           <el-table :data="endpoint.fields" size="small" border
             ><el-table-column prop="name" label="字段" width="160"
               ><template #default="{ row }"
@@ -963,7 +1013,9 @@ async function tryEndpoint(endpoint: Endpoint) {
           /></el-table>
           <div class="example-grid">
             <div>
-              <div class="code-label">请求示例</div>
+              <div class="code-label">
+                {{ endpoint.method === "GET" ? "路径参数示例" : "请求示例" }}
+              </div>
               <pre>{{ JSON.stringify(endpoint.request, null, 2) }}</pre>
             </div>
             <div>
@@ -1004,7 +1056,10 @@ async function tryEndpoint(endpoint: Endpoint) {
               label="Fingerprint（可选）"
               ><el-input v-model="fingerprint"
             /></el-form-item>
-            <el-form-item label="请求 JSON"
+            <el-form-item
+              :label="
+                endpoint.method === 'GET' ? '路径参数 JSON' : '请求 JSON'
+              "
               ><el-input
                 v-model="bodies[endpoint.key]"
                 type="textarea"

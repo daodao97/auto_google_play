@@ -18,8 +18,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const slashVaultBaseURL = "https://vault.slash.com"
-const slashCCMaxAlias = "ccmax"
+const (
+	slashVaultBaseURL        = "https://vault.slash.com"
+	slashCCMaxAlias          = "ccmax"
+	defaultSlashCardGroupID  = "card_group_3febhaydgdiq9"
+	automaticSlashCardPrefix = "ccmax-auto"
+)
 
 type slashCreateCardInput struct {
 	Source           string         `json:"source"`
@@ -125,6 +129,7 @@ func (s *Server) createSlashCard(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "BAD_REQUEST", errors.New("name is required"))
 		return
 	}
+	applySlashCardDefaults(&input)
 	token, err := s.store.Credential(c.Request.Context(), input.Source)
 	if err != nil {
 		handleStoreError(c, err)
@@ -169,6 +174,41 @@ func (s *Server) createSlashCard(c *gin.Context) {
 	}
 	s.store.Audit(c.Request.Context(), "admin", currentAdmin(c).ID, "create_slash_card", "card", strconv.FormatInt(result.LocalID, 10), fmt.Sprintf(`{"source":%q,"slashCardId":%q,"name":%q}`, input.Source, created.ID, created.Name), clientIP(c))
 	ok(c, gin.H{"id": result.LocalID, "source": input.Source, "cardId": created.ID, "last4": firstNonEmpty(result.Last4, created.Last4), "name": firstNonEmpty(result.Name, created.Name)})
+}
+
+func applySlashCardDefaults(input *slashCreateCardInput) {
+	if strings.TrimSpace(input.CardGroupID) == "" {
+		input.CardGroupID = defaultSlashCardGroupID
+	}
+}
+
+func (s *Server) createSlashCardForDispatch(ctx context.Context, requestedSource string) error {
+	source := strings.ToLower(strings.TrimSpace(requestedSource))
+	if source == "" {
+		var err error
+		source, err = s.store.CredentialSourceByPrefix(ctx, "slash")
+		if err != nil {
+			return err
+		}
+	}
+	if !strings.HasPrefix(source, "slash") {
+		return errors.New("automatic card creation requires a Slash source")
+	}
+	token, err := s.store.Credential(ctx, source)
+	if err != nil {
+		return err
+	}
+	input := slashCreateCardInput{
+		Source: source,
+		Name:   automaticSlashCardPrefix + "-" + randomToken(8),
+	}
+	applySlashCardDefaults(&input)
+	created, err := createCardAtSlash(ctx, s.slashBaseURL, token, input)
+	if err != nil {
+		return err
+	}
+	_, err = s.importCreatedSlashCard(ctx, source, token, input.LegalEntity, created.ID)
+	return err
 }
 
 func (s *Server) importSlashCardByID(c *gin.Context) {
